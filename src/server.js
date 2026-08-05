@@ -5,6 +5,7 @@ const dotenv = require("dotenv");
 
 dotenv.config();
 const db = require("./db");
+const access = require("./access-control");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -121,6 +122,93 @@ function relayAxiosResponse(res, response) {
   return res.status(response.status).send(response.data);
 }
 
+function extractConversation(data) {
+  return data?.data || data?.payload || data || null;
+}
+
+async function fetchConversation(session, conversationId) {
+  const response = await chatwootRequest(session, {
+    method: "GET",
+    url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations/${conversationId}`,
+  });
+  return {
+    response,
+    conversation: response.status >= 200 && response.status < 300
+      ? extractConversation(response.data)
+      : null,
+  };
+}
+
+async function requireConversationAccess(req, res, conversationId) {
+  const fetched = await fetchConversation(req.crmSession, conversationId);
+  if (!fetched.conversation) {
+    relayAxiosResponse(res, fetched.response);
+    return null;
+  }
+  if (!access.hasConversationAccess(req.crmSession, fetched.conversation)) {
+    res.status(403).json({ error: "Esta conversa não pertence ao seu escopo operacional" });
+    return null;
+  }
+  return fetched.conversation;
+}
+
+async function fetchAllChatwootConversations(session) {
+  const conversations = [];
+  const seen = new Set();
+  for (let page = 1; page <= 200; page += 1) {
+    const response = await chatwootRequest(session, {
+      method: "GET",
+      url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations?status=all&assignee_type=all&page=${page}`,
+    });
+    if (response.status < 200 || response.status >= 300) {
+      const error = new Error("Falha ao carregar as conversas do Chatwoot");
+      error.status = response.status;
+      error.response = response.data;
+      throw error;
+    }
+    const payload = extractPayload(response.data);
+    if (!Array.isArray(payload) || payload.length === 0) break;
+    for (const conversation of payload) {
+      if (!seen.has(conversation.id)) {
+        seen.add(conversation.id);
+        conversations.push(conversation);
+      }
+    }
+    if (payload.length < 25) break;
+  }
+  return conversations;
+}
+
+async function readConversationLabels(session, conversationId) {
+  const response = await chatwootRequest(session, {
+    method: "GET",
+    url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations/${conversationId}/labels`,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    const error = new Error("Falha ao consultar etiquetas da conversa");
+    error.status = response.status;
+    error.response = response.data;
+    throw error;
+  }
+  return extractLabelNames(response.data);
+}
+
+async function writeConversationLabels(session, conversationId, labels) {
+  const response = await chatwootRequest(session, {
+    method: "POST",
+    url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations/${conversationId}/labels`,
+    data: { labels: normalizeLabelNames(labels) },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    const error = new Error("Falha ao atualizar etiquetas da conversa");
+    error.status = response.status;
+    error.response = response.data;
+    throw error;
+  }
+  const updated = extractLabelNames(response.data);
+  return updated.length ? updated : normalizeLabelNames(labels);
+}
+
 function normalizeStages(input) {
   if (!Array.isArray(input) || input.length < 3 || input.length > 50) {
     const error = new Error("Informe entre 3 e 50 etapas válidas");
@@ -226,7 +314,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.3.0-central",
+    version: "1.3.2-operational-scopes",
     database: "sqlite-central",
   });
 });
@@ -373,6 +461,35 @@ app.get("/api/crm/config", requireSession, (req, res) => {
   });
 });
 
+app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => {
+  try {
+    const allConversations = await fetchAllChatwootConversations(req.crmSession);
+    db.syncInterventions({
+      organizationId: req.crmSession.organization_id,
+      conversations: allConversations,
+    });
+    const conversations = access
+      .filterConversationsForSession(req.crmSession, allConversations);
+    const sortedConversations = access.sortOperationalQueue(conversations);
+    return res.json({
+      conversations: sortedConversations,
+      totalVisible: sortedConversations.length,
+      totalOrganization: allConversations.length,
+      interventionCount: sortedConversations.filter(access.isInterventionConversation).length,
+      scope: req.crmSession.visibility_scope,
+      linkedAgentId: req.crmSession.chatwoot_agent_id
+        ? Number(req.crmSession.chatwoot_agent_id)
+        : null,
+    });
+  } catch (error) {
+    console.error("Erro ao carregar escopo operacional:", error.message);
+    return res.status(error.status || 502).json({
+      error: error.message || "Falha ao carregar as conversas do escopo operacional",
+      details: error.response || undefined,
+    });
+  }
+});
+
 app.post(
   "/api/crm/bootstrap",
   requireSession,
@@ -504,9 +621,13 @@ app.post("/api/crm/users", requireSession, requirePermission("users:manage"), (r
   const name = String(req.body?.name || "").trim().slice(0, 80);
   const email = String(req.body?.email || "").trim();
   const password = String(req.body?.password || "");
-  const role = ["admin", "manager", "agent", "viewer"].includes(req.body?.role)
-    ? req.body.role
-    : "agent";
+  const operationalRole = ["admin", "manager", "sdr", "seller", "agent", "viewer"].includes(req.body?.operationalRole)
+    ? req.body.operationalRole
+    : "sdr";
+  const visibilityScope = ["all", "mine", "unassigned_and_mine", "unassigned"].includes(req.body?.visibilityScope)
+    ? req.body.visibilityScope
+    : undefined;
+  const chatwootAgentId = req.body?.chatwootAgentId ? Number(req.body.chatwootAgentId) : null;
   if (!name || !email || password.length < 10) {
     return res.status(400).json({ error: "Informe nome, e-mail e senha com pelo menos 10 caracteres" });
   }
@@ -517,7 +638,9 @@ app.post("/api/crm/users", requireSession, requirePermission("users:manage"), (r
       name,
       email,
       password,
-      role,
+      operationalRole,
+      chatwootAgentId,
+      visibilityScope,
     });
     return res.status(201).json({ user });
   } catch (error) {
@@ -529,24 +652,37 @@ app.patch("/api/crm/users/:id", requireSession, requirePermission("users:manage"
   if (req.params.id === req.crmSession.user_id && req.body?.active === false) {
     return res.status(400).json({ error: "Você não pode desativar seu próprio usuário" });
   }
-  const role = req.body?.role && ["admin", "manager", "agent", "viewer"].includes(req.body.role)
-    ? req.body.role
+  const operationalRole = req.body?.operationalRole &&
+    ["admin", "manager", "sdr", "seller", "agent", "viewer"].includes(req.body.operationalRole)
+    ? req.body.operationalRole
+    : undefined;
+  const visibilityScope = req.body?.visibilityScope &&
+    ["all", "mine", "unassigned_and_mine", "unassigned"].includes(req.body.visibilityScope)
+    ? req.body.visibilityScope
     : undefined;
   const password = req.body?.password ? String(req.body.password) : undefined;
   if (password && password.length < 10) {
     return res.status(400).json({ error: "A nova senha deve possuir pelo menos 10 caracteres" });
   }
-  const user = db.updateUser({
-    organizationId: req.crmSession.organization_id,
-    actorUserId: req.crmSession.user_id,
-    userId: req.params.id,
-    name: req.body?.name ? String(req.body.name).trim().slice(0, 80) : undefined,
-    role,
-    active: typeof req.body?.active === "boolean" ? req.body.active : undefined,
-    password,
-  });
-  if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
-  return res.json({ user });
+  try {
+    const user = db.updateUser({
+      organizationId: req.crmSession.organization_id,
+      actorUserId: req.crmSession.user_id,
+      userId: req.params.id,
+      name: req.body?.name ? String(req.body.name).trim().slice(0, 80) : undefined,
+      operationalRole,
+      chatwootAgentId: req.body?.chatwootAgentId === undefined
+        ? undefined
+        : req.body.chatwootAgentId,
+      visibilityScope,
+      active: typeof req.body?.active === "boolean" ? req.body.active : undefined,
+      password,
+    });
+    if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
+    return res.json({ user });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
 app.get("/api/crm/audit", requireSession, requirePermission("audit:read"), (req, res) => {
@@ -570,6 +706,8 @@ app.post(
     }
 
     try {
+      const allowedConversation = await requireConversationAccess(req, res, conversationId);
+      if (!allowedConversation) return;
       const [availableResponse, currentResponse] = await Promise.all([
         chatwootRequest(req.crmSession, {
           method: "GET",
@@ -655,6 +793,92 @@ app.post(
 );
 
 app.post(
+  "/api/crm/interventions/:conversationId/assume",
+  requireSession,
+  requirePermission("interventions:manage"),
+  async (req, res) => {
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      return res.status(400).json({ error: "Conversa inválida" });
+    }
+    const linkedAgentId = Number(req.crmSession.chatwoot_agent_id || 0);
+    if (!linkedAgentId) {
+      return res.status(400).json({
+        error: "Seu usuário ainda não está vinculado a um agente do Chatwoot",
+      });
+    }
+    try {
+      const conversation = await requireConversationAccess(req, res, conversationId);
+      if (!conversation) return;
+      const assignmentResponse = await chatwootRequest(req.crmSession, {
+        method: "POST",
+        url: `${req.crmSession.chatwoot_base_url}/api/v1/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}/assignments`,
+        data: { assignee_id: linkedAgentId },
+      });
+      if (assignmentResponse.status < 200 || assignmentResponse.status >= 300) {
+        return relayAxiosResponse(res, assignmentResponse);
+      }
+      const before = await readConversationLabels(req.crmSession, conversationId);
+      const next = before.filter(
+        (label) => String(label).toLocaleLowerCase("pt-BR") !== "precisa-humano"
+      );
+      if (!next.some((label) => String(label).toLocaleLowerCase("pt-BR") === "atendimento-manual")) {
+        next.push("atendimento-manual");
+      }
+      const labels = await writeConversationLabels(req.crmSession, conversationId, next);
+      db.markInterventionAssumed({
+        organizationId: req.crmSession.organization_id,
+        conversationId,
+        actorUserId: req.crmSession.user_id,
+        agentId: linkedAgentId,
+        labels,
+      });
+      return res.json({ assumed: true, assigneeId: linkedAgentId, labels });
+    } catch (error) {
+      console.error("Erro ao assumir intervenção:", error.message);
+      return res.status(error.status || 502).json({
+        error: error.message || "Falha ao assumir a intervenção",
+        details: error.response || undefined,
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/crm/interventions/:conversationId/resolve",
+  requireSession,
+  requirePermission("interventions:manage"),
+  async (req, res) => {
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      return res.status(400).json({ error: "Conversa inválida" });
+    }
+    try {
+      const conversation = await requireConversationAccess(req, res, conversationId);
+      if (!conversation) return;
+      const before = await readConversationLabels(req.crmSession, conversationId);
+      const blocking = new Set(["precisa-humano", "atendimento-manual"]);
+      const next = before.filter(
+        (label) => !blocking.has(String(label).toLocaleLowerCase("pt-BR"))
+      );
+      const labels = await writeConversationLabels(req.crmSession, conversationId, next);
+      db.markInterventionResolved({
+        organizationId: req.crmSession.organization_id,
+        conversationId,
+        actorUserId: req.crmSession.user_id,
+      });
+      return res.json({ resolved: true, labels });
+    } catch (error) {
+      console.error("Erro ao resolver intervenção:", error.message);
+      return res.status(error.status || 502).json({
+        error: error.message || "Falha ao resolver a intervenção",
+        details: error.response || undefined,
+      });
+    }
+  }
+);
+
+app.post(
   "/api/crm/opportunities/:conversationId/custom-attributes",
   requireSession,
   requirePermission("opportunities:write"),
@@ -665,6 +889,8 @@ app.post(
       return res.status(400).json({ error: "Conversa ou atributos inválidos" });
     }
     try {
+      const allowedConversation = await requireConversationAccess(req, res, conversationId);
+      if (!allowedConversation) return;
       const conversationResponse = await chatwootRequest(req.crmSession, {
         method: "GET",
         url: `${req.crmSession.chatwoot_base_url}/api/v1/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}`,
@@ -710,21 +936,61 @@ app.post(
 app.use("/api/v1", requireSession, async (req, res) => {
   const session = req.crmSession;
   const allowedMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
-  if (!allowedMethods.has(req.method)) return res.status(405).json({ error: "Método não permitido" });
-
-  if (req.method !== "GET" && !hasPermission(session, "opportunities:write")) {
-    return res.status(403).json({ error: "Seu perfil possui acesso somente para leitura" });
-  }
-  if (/\/messages(?:\?|$)/.test(req.url) && req.method === "POST" && !hasPermission(session, "messages:send")) {
-    return res.status(403).json({ error: "Seu perfil não pode enviar mensagens" });
-  }
-
-  const requestedAccountMatch = req.url.match(/^\/accounts\/(\d+)/);
-  if (requestedAccountMatch && Number(requestedAccountMatch[1]) !== Number(session.chatwoot_account_id)) {
-    return res.status(403).json({ error: "Conta diferente da organização autenticada" });
+  if (!allowedMethods.has(req.method)) {
+    return res.status(405).json({ error: "Método não permitido" });
   }
 
   try {
+    if (req.method !== "GET" && !hasPermission(session, "opportunities:write")) {
+      return res.status(403).json({ error: "Seu perfil possui acesso somente para leitura" });
+    }
+    if (
+      /\/messages(?:\?|$)/.test(req.url) &&
+      req.method === "POST" &&
+      !hasPermission(session, "messages:send")
+    ) {
+      return res.status(403).json({ error: "Seu perfil não pode enviar mensagens" });
+    }
+
+    const requestedAccountMatch = req.url.match(/^\/accounts\/(\d+)/);
+    if (
+      requestedAccountMatch &&
+      Number(requestedAccountMatch[1]) !== Number(session.chatwoot_account_id)
+    ) {
+      return res.status(403).json({ error: "Conta diferente da organização autenticada" });
+    }
+
+    const isConversationCollection = /^\/accounts\/\d+\/conversations(?:\?|$)/.test(req.url);
+    if (isConversationCollection) {
+      return res.status(403).json({
+        error: "Use o endpoint de escopo operacional para listar conversas",
+      });
+    }
+
+    const conversationMatch = req.url.match(/^\/accounts\/\d+\/conversations\/(\d+)/);
+    if (conversationMatch) {
+      const conversationId = Number(conversationMatch[1]);
+      const conversation = await requireConversationAccess(req, res, conversationId);
+      if (!conversation) return;
+
+      const isAssignmentWrite =
+        /\/assignments(?:\?|$)/.test(req.url) && req.method === "POST";
+      if (isAssignmentWrite && !hasPermission(session, "assignments:manage")) {
+        return res.status(403).json({
+          error: "Seu perfil não pode transferir oportunidades para outro responsável",
+        });
+      }
+    } else if (session.visibility_scope !== "all") {
+      const safeScopedCollection =
+        req.method === "GET" &&
+        /^\/accounts\/\d+\/(agents|teams|inboxes|labels)(?:\?|$)/.test(req.url);
+      if (!safeScopedCollection) {
+        return res.status(403).json({
+          error: "Este recurso não está disponível para o seu escopo operacional",
+        });
+      }
+    }
+
     const response = await chatwootRequest(session, {
       method: req.method,
       url: `${session.chatwoot_base_url}/api/v1${req.url}`,
@@ -747,18 +1013,31 @@ app.use("/api/v1", requireSession, async (req, res) => {
     return relayAxiosResponse(res, response);
   } catch (error) {
     console.error("Erro no proxy do Chatwoot:", error.message);
-    return res.status(502).json({ error: "Erro ao processar a requisição" });
+    return res.status(error.status || 502).json({
+      error: error.message || "Erro ao processar a requisição",
+      details: error.response || undefined,
+    });
   }
 });
 
-app.get("/build-url-to-redirect", requireSession, (req, res) => {
+app.get("/build-url-to-redirect", requireSession, async (req, res) => {
   const conversationId = Number(req.query.conversationId);
   if (!Number.isInteger(conversationId) || conversationId <= 0) {
     return res.status(400).json({ error: "conversationId inválido" });
   }
-  return res.json({
-    url: `${req.crmSession.chatwoot_base_url}/app/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}`,
-  });
+  try {
+    const conversation = await requireConversationAccess(req, res, conversationId);
+    if (!conversation) return;
+    return res.json({
+      url: `${req.crmSession.chatwoot_base_url}/app/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}`,
+    });
+  } catch (error) {
+    console.error("Erro ao gerar link do Chatwoot:", error.message);
+    return res.status(error.status || 502).json({
+      error: error.message || "Falha ao gerar link da conversa",
+      details: error.response || undefined,
+    });
+  }
 });
 
 app.use((error, _req, res, _next) => {
@@ -769,6 +1048,6 @@ app.use((error, _req, res, _next) => {
 setInterval(db.cleanupSessions, 15 * 60 * 1000).unref();
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`CRM central V1.3 rodando na porta ${PORT}`);
+  console.log(`CRM central V1.3.2 rodando na porta ${PORT}`);
   console.log(`Banco central: ${db.databasePath}`);
 });

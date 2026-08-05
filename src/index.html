@@ -72,6 +72,11 @@
             <span class="nav-icon">◫</span>
             Dashboard
           </button>
+          <button class="nav-item nav-item-alert" data-view="interventions">
+            <span class="nav-icon">⚠</span>
+            Intervenções
+            <span id="intervention-nav-count" class="nav-count is-hidden">0</span>
+          </button>
           <button class="nav-item" data-view="pipeline">
             <span class="nav-icon">▥</span>
             Pipeline
@@ -155,8 +160,8 @@
               <article class="panel">
                 <div class="panel-header">
                   <div>
-                    <p class="eyebrow">PRIORIDADE</p>
-                    <h2>Próximas tarefas</h2>
+                    <p class="eyebrow">FOCO OPERACIONAL</p>
+                    <h2>Minha fila agora</h2>
                   </div>
                 </div>
                 <div id="dashboard-tasks" class="compact-list"></div>
@@ -172,6 +177,29 @@
               </div>
               <div id="recent-conversations" class="data-list"></div>
             </article>
+          </section>
+
+          <section id="view-interventions" class="view">
+            <div class="intervention-summary">
+              <div>
+                <p class="eyebrow">SEGURANÇA OPERACIONAL</p>
+                <h2>Intervenção humana</h2>
+                <p class="muted">
+                  Conversas que o fluxo não conseguiu resolver ou que estão sob atendimento manual.
+                  A fila respeita o escopo de cada usuário.
+                </p>
+              </div>
+              <div class="intervention-summary-count">
+                <strong id="intervention-view-count">0</strong>
+                <span>pendentes no seu escopo</span>
+              </div>
+            </div>
+            <div class="intervention-toolbar">
+              <button class="button button-primary" type="button" data-intervention-filter="all">Todas</button>
+              <button class="button button-ghost" type="button" data-intervention-filter="unassigned">Sem responsável</button>
+              <button class="button button-ghost" type="button" data-intervention-filter="mine">Comigo</button>
+            </div>
+            <div id="intervention-list" class="intervention-list"></div>
           </section>
 
           <section id="view-pipeline" class="view">
@@ -343,17 +371,28 @@
                   </div>
                 </div>
                 <p class="muted">
-                  Crie acessos próprios para administradores, gerentes, atendentes e usuários somente leitura.
+                  Vincule cada acesso ao agente correspondente no Chatwoot. O servidor entrega somente
+                  os leads permitidos pelo escopo operacional.
                 </p>
-                <form id="crm-user-form" class="crm-user-form">
+                <form id="crm-user-form" class="crm-user-form crm-user-form-operational">
                   <input id="crm-user-name" type="text" maxlength="80" placeholder="Nome do usuário" required />
                   <input id="crm-user-email" type="email" placeholder="E-mail" required />
                   <input id="crm-user-password" type="password" minlength="10" placeholder="Senha inicial (mín. 10)" required />
-                  <select id="crm-user-role">
-                    <option value="agent">Atendente</option>
+                  <select id="crm-user-role" aria-label="Função operacional">
+                    <option value="sdr">SDR</option>
+                    <option value="seller">Vendedor</option>
                     <option value="manager">Gerente</option>
                     <option value="viewer">Somente leitura</option>
                     <option value="admin">Administrador</option>
+                  </select>
+                  <select id="crm-user-agent" aria-label="Agente vinculado no Chatwoot">
+                    <option value="">Selecione o agente do Chatwoot</option>
+                  </select>
+                  <select id="crm-user-scope" aria-label="Escopo de visualização">
+                    <option value="unassigned_and_mine">Fila SDR + meus leads</option>
+                    <option value="mine">Somente meus leads</option>
+                    <option value="all">Todos os leads</option>
+                    <option value="unassigned">Somente sem responsável</option>
                   </select>
                   <button id="crm-user-submit" class="button button-primary" type="submit">Criar usuário</button>
                 </form>
@@ -384,6 +423,8 @@
                 <dl class="definition-list">
                   <div><dt>Organização</dt><dd id="settings-organization-name">—</dd></div>
                   <div><dt>Usuário</dt><dd id="settings-current-user">—</dd></div>
+                  <div><dt>Escopo operacional</dt><dd id="settings-current-scope">—</dd></div>
+                  <div><dt>Agente vinculado</dt><dd id="settings-linked-agent">—</dd></div>
                   <div><dt>Conta Chatwoot</dt><dd id="settings-account-id">—</dd></div>
                   <div><dt>Sincronização</dt><dd>Automática a cada 60s + manual</dd></div>
                   <div><dt>Credencial Chatwoot</dt><dd>Criptografada no servidor</dd></div>
@@ -411,6 +452,23 @@
 
         <div class="drawer-body">
           <section class="drawer-section">
+            <div id="drawer-intervention-panel" class="drawer-intervention-panel is-hidden">
+              <div>
+                <span class="intervention-kicker">⚠ INTERVENÇÃO HUMANA</span>
+                <strong id="drawer-intervention-title">Ação humana necessária</strong>
+                <small id="drawer-intervention-description">
+                  O fluxo foi pausado por uma etiqueta operacional.
+                </small>
+              </div>
+              <div class="intervention-actions">
+                <button id="assume-intervention" type="button" class="button button-primary button-small">
+                  Assumir atendimento
+                </button>
+                <button id="resolve-intervention" type="button" class="button button-ghost button-small">
+                  Resolver e liberar fluxo
+                </button>
+              </div>
+            </div>
             <div class="field-grid">
               <label>
                 Etapa comercial

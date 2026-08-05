@@ -1988,3 +1988,276 @@ tbody tr:hover {
   }
 }
 
+
+/* =========================================================
+   CRM V1.3.2 — Escopos operacionais e intervenção humana
+   ========================================================= */
+.nav-item {
+  position: relative;
+}
+
+.nav-count {
+  margin-left: auto;
+  min-width: 1.55rem;
+  height: 1.55rem;
+  padding: 0 0.42rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.15);
+}
+
+.nav-item-alert:not(.is-active) .nav-icon {
+  color: #f5c542;
+}
+
+.intervention-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.4rem;
+  margin-bottom: 1rem;
+  border: 1px solid #fecaca;
+  border-left: 5px solid #dc2626;
+  border-radius: 16px;
+  background: #fff7f7;
+}
+
+.intervention-summary h2 {
+  margin: 0.2rem 0 0.35rem;
+}
+
+.intervention-summary-count {
+  min-width: 150px;
+  text-align: center;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #fecaca;
+}
+
+.intervention-summary-count strong {
+  display: block;
+  font-size: 2rem;
+  color: #b91c1c;
+}
+
+.intervention-summary-count span {
+  color: #7f1d1d;
+  font-size: 0.78rem;
+}
+
+.intervention-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.intervention-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.intervention-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid #fecaca;
+  border-left: 5px solid #dc2626;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.intervention-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.intervention-card-header > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.intervention-card-header small,
+.intervention-card-details span,
+.intervention-age {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.intervention-kicker {
+  color: #b91c1c;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.intervention-card-details {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.7rem;
+  background: #fff7f7;
+  border-radius: 10px;
+}
+
+.intervention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.intervention-empty {
+  grid-column: 1 / -1;
+}
+
+.opportunity-card.is-intervention {
+  border-left-color: #dc2626 !important;
+  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.12);
+}
+
+.card-intervention-warning {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0.55rem 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: 9px;
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+.card-intervention-warning strong {
+  font-size: 0.76rem;
+}
+
+.card-intervention-warning span {
+  font-size: 0.7rem;
+}
+
+.card-intervention-action {
+  border: 0;
+  border-radius: 8px;
+  background: #dc2626;
+  color: #fff;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.focus-item.is-intervention {
+  border-left: 4px solid #dc2626;
+  padding-left: 0.65rem;
+}
+
+.focus-item-detail {
+  max-width: 45%;
+  text-align: right;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.drawer-intervention-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem;
+  border: 1px solid #fecaca;
+  border-left: 5px solid #dc2626;
+  border-radius: 12px;
+  background: #fff7f7;
+}
+
+.drawer-intervention-panel > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.drawer-intervention-panel small {
+  color: #7f1d1d;
+}
+
+.crm-user-form-operational {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.crm-user-form-operational .button {
+  min-height: 42px;
+}
+
+.crm-user-row-operational {
+  align-items: flex-start;
+}
+
+.crm-user-info small {
+  display: block;
+  margin-top: 0.2rem;
+}
+
+.linked-agent-ok {
+  color: #15803d;
+}
+
+.linked-agent-warning {
+  color: #b45309;
+}
+
+.crm-user-operational-controls {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(180px, 1fr) minmax(200px, 1.2fr) auto auto;
+  gap: 0.45rem;
+  width: min(100%, 860px);
+}
+
+@media (max-width: 980px) {
+  .crm-user-form-operational,
+  .crm-user-operational-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .intervention-summary,
+  .drawer-intervention-panel {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 640px) {
+  .crm-user-form-operational,
+  .crm-user-operational-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .intervention-list {
+    grid-template-columns: 1fr;
+  }
+
+  .intervention-card-header {
+    flex-direction: column;
+  }
+
+  .focus-item-detail {
+    max-width: 100%;
+    text-align: left;
+  }
+}
+
+.pipeline-column-warning {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.pipeline-column-warning .pipeline-column-header {
+  background: #fee2e2;
+  color: #7f1d1d;
+}

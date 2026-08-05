@@ -22,6 +22,8 @@ const ROLE_PERMISSIONS = {
     "filters:share",
     "users:manage",
     "audit:read",
+    "assignments:manage",
+    "interventions:manage",
   ],
   manager: [
     "crm:read",
@@ -30,10 +32,54 @@ const ROLE_PERMISSIONS = {
     "pipeline:manage",
     "filters:share",
     "audit:read",
+    "assignments:manage",
+    "interventions:manage",
   ],
   agent: ["crm:read", "opportunities:write", "messages:send"],
   viewer: ["crm:read"],
 };
+
+const OPERATIONAL_PROFILES = {
+  admin: { membershipRole: "admin", visibilityScope: "all" },
+  manager: { membershipRole: "manager", visibilityScope: "all" },
+  sdr: { membershipRole: "agent", visibilityScope: "unassigned_and_mine" },
+  seller: { membershipRole: "agent", visibilityScope: "mine" },
+  agent: { membershipRole: "agent", visibilityScope: "all" },
+  viewer: { membershipRole: "viewer", visibilityScope: "all" },
+};
+
+const OPERATIONAL_PERMISSIONS = {
+  admin: ["assignments:manage", "interventions:manage"],
+  manager: ["assignments:manage", "interventions:manage"],
+  sdr: ["assignments:manage", "interventions:manage"],
+  seller: ["interventions:manage"],
+  agent: ["assignments:manage", "interventions:manage"],
+  viewer: [],
+};
+
+function normalizeOperationalProfile(value, fallbackRole = "agent") {
+  const key = String(value || "").trim().toLowerCase();
+  if (OPERATIONAL_PROFILES[key]) return key;
+  if (fallbackRole === "admin") return "admin";
+  if (fallbackRole === "manager") return "manager";
+  if (fallbackRole === "viewer") return "viewer";
+  return "agent";
+}
+
+function normalizeVisibilityScope(value, operationalRole) {
+  if (["admin", "manager"].includes(operationalRole)) return "all";
+  const requested = String(value || "").trim();
+  const allowed = new Set(["all", "mine", "unassigned_and_mine", "unassigned"]);
+  if (allowed.has(requested)) return requested;
+  return OPERATIONAL_PROFILES[operationalRole]?.visibilityScope || "all";
+}
+
+function permissionsFor(role, operationalRole) {
+  return [...new Set([
+    ...(ROLE_PERMISSIONS[role] || []),
+    ...(OPERATIONAL_PERMISSIONS[operationalRole] || []),
+  ])];
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -92,6 +138,13 @@ function safeJsonParse(value, fallback = null) {
     return value ? JSON.parse(value) : fallback;
   } catch (_error) {
     return fallback;
+  }
+}
+
+function ensureColumn(database, tableName, columnName, definition) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column) => column.name === columnName)) {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
 }
 
@@ -229,13 +282,57 @@ function createDatabase() {
       FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS interventions (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      conversation_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      trigger_labels_json TEXT NOT NULL DEFAULT '[]',
+      assignee_agent_id INTEGER,
+      first_detected_at TEXT NOT NULL,
+      last_detected_at TEXT NOT NULL,
+      assumed_by_user_id TEXT,
+      assumed_at TEXT,
+      resolved_by_user_id TEXT,
+      resolved_at TEXT,
+      updated_at TEXT NOT NULL,
+      UNIQUE (organization_id, conversation_id),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_stages_pipeline_position ON pipeline_stages(pipeline_id, position);
     CREATE INDEX IF NOT EXISTS idx_filters_org_owner ON filter_presets(organization_id, owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_org_due ON crm_tasks(organization_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_audit_org_created ON audit_logs(organization_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_interventions_org_status ON interventions(organization_id, status, updated_at DESC);
   `);
+
+  ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
+  ensureColumn(db, "memberships", "chatwoot_agent_id", "INTEGER");
+  ensureColumn(db, "memberships", "visibility_scope", "TEXT NOT NULL DEFAULT 'all'");
+
+  db.exec(`
+    UPDATE memberships
+    SET operational_role = CASE role
+      WHEN 'admin' THEN 'admin'
+      WHEN 'manager' THEN 'manager'
+      WHEN 'viewer' THEN 'viewer'
+      ELSE COALESCE(NULLIF(operational_role, ''), 'agent')
+    END
+    WHERE operational_role IS NULL OR operational_role = '' OR operational_role = 'agent';
+
+    UPDATE memberships
+    SET visibility_scope = CASE operational_role
+      WHEN 'sdr' THEN 'unassigned_and_mine'
+      WHEN 'seller' THEN 'mine'
+      ELSE COALESCE(NULLIF(visibility_scope, ''), 'all')
+    END
+    WHERE visibility_scope IS NULL OR visibility_scope = '';
+  `);
+
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)").run(nowIso());
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(nowIso());
 
   return { db, databasePath };
 }
@@ -347,8 +444,9 @@ function bootstrapFromEnv(baseUrl) {
       VALUES (?, ?, ?, ?, 1, ?, ?)
     `).run(userId, adminEmail, adminName, hashPassword(adminPassword), now, now);
     db.prepare(`
-      INSERT INTO memberships (user_id, organization_id, role, created_at, updated_at)
-      VALUES (?, ?, 'admin', ?, ?)
+      INSERT INTO memberships
+      (user_id, organization_id, role, operational_role, visibility_scope, created_at, updated_at)
+      VALUES (?, ?, 'admin', 'admin', 'all', ?, ?)
     `).run(userId, organizationId, now, now);
   });
   ensureDefaultPipeline(organizationId);
@@ -365,7 +463,8 @@ function bootstrapFromEnv(baseUrl) {
 
 function authenticate(email, password) {
   const user = db.prepare(`
-    SELECT u.*, m.organization_id, m.role, o.name AS organization_name,
+    SELECT u.*, m.organization_id, m.role, m.operational_role,
+           m.chatwoot_agent_id, m.visibility_scope, o.name AS organization_name,
            o.slug AS organization_slug, o.chatwoot_account_id, o.chatwoot_base_url,
            o.chatwoot_token_encrypted
     FROM users u
@@ -397,7 +496,8 @@ function getSession(rawToken) {
   const session = db.prepare(`
     SELECT s.token_hash, s.created_at AS session_created_at, s.expires_at,
            u.id AS user_id, u.email, u.name AS user_name, u.active,
-           m.role, o.id AS organization_id, o.name AS organization_name,
+           m.role, m.operational_role, m.chatwoot_agent_id, m.visibility_scope,
+           o.id AS organization_id, o.name AS organization_name,
            o.slug AS organization_slug, o.chatwoot_account_id,
            o.chatwoot_base_url, o.chatwoot_token_encrypted
     FROM sessions s
@@ -409,7 +509,15 @@ function getSession(rawToken) {
   if (!session) return null;
   return {
     ...session,
-    permissions: ROLE_PERMISSIONS[session.role] || [],
+    operational_role: normalizeOperationalProfile(session.operational_role, session.role),
+    visibility_scope: normalizeVisibilityScope(
+      session.visibility_scope,
+      normalizeOperationalProfile(session.operational_role, session.role)
+    ),
+    permissions: permissionsFor(
+      session.role,
+      normalizeOperationalProfile(session.operational_role, session.role)
+    ),
     chatwootToken: decryptSecret(session.chatwoot_token_encrypted),
   };
 }
@@ -438,6 +546,9 @@ function sessionPayload(session) {
       name: session.user_name,
       email: session.email,
       role: session.role,
+      operationalRole: session.operational_role,
+      chatwootAgentId: session.chatwoot_agent_id ? Number(session.chatwoot_agent_id) : null,
+      visibilityScope: session.visibility_scope,
     },
     permissions: session.permissions,
   };
@@ -558,15 +669,35 @@ function deleteFilterPreset({ organizationId, userId, filterId, canManageShared 
 
 function listUsers(organizationId) {
   return db.prepare(`
-    SELECT u.id, u.name, u.email, u.active, m.role, u.created_at, u.updated_at
+    SELECT u.id, u.name, u.email, u.active, m.role, m.operational_role,
+           m.chatwoot_agent_id, m.visibility_scope, u.created_at, u.updated_at
     FROM users u
     JOIN memberships m ON m.user_id = u.id
     WHERE m.organization_id = ?
     ORDER BY u.active DESC, u.name
-  `).all(organizationId).map((user) => ({ ...user, active: Boolean(user.active) }));
+  `).all(organizationId).map((user) => ({
+    ...user,
+    active: Boolean(user.active),
+    operationalRole: normalizeOperationalProfile(user.operational_role, user.role),
+    chatwootAgentId: user.chatwoot_agent_id ? Number(user.chatwoot_agent_id) : null,
+    visibilityScope: normalizeVisibilityScope(
+      user.visibility_scope,
+      normalizeOperationalProfile(user.operational_role, user.role)
+    ),
+  }));
 }
 
-function createUser({ organizationId, actorUserId, name, email, password, role }) {
+function createUser({
+  organizationId,
+  actorUserId,
+  name,
+  email,
+  password,
+  role,
+  operationalRole,
+  chatwootAgentId,
+  visibilityScope,
+}) {
   const normalizedEmail = normalizeEmail(email);
   const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(normalizedEmail);
   if (existing) {
@@ -574,6 +705,19 @@ function createUser({ organizationId, actorUserId, name, email, password, role }
     error.status = 409;
     throw error;
   }
+
+  const normalizedOperationalRole = normalizeOperationalProfile(operationalRole || role, role);
+  const membershipRole = OPERATIONAL_PROFILES[normalizedOperationalRole]?.membershipRole || "agent";
+  const normalizedScope = normalizeVisibilityScope(visibilityScope, normalizedOperationalRole);
+  const linkedAgentId = Number(chatwootAgentId);
+  const safeAgentId = Number.isInteger(linkedAgentId) && linkedAgentId > 0 ? linkedAgentId : null;
+
+  if (["sdr", "seller"].includes(normalizedOperationalRole) && !safeAgentId) {
+    const error = new Error("Vincule o usuário a um agente do Chatwoot");
+    error.status = 400;
+    throw error;
+  }
+
   const id = crypto.randomUUID();
   const now = nowIso();
   transaction(() => {
@@ -582,9 +726,20 @@ function createUser({ organizationId, actorUserId, name, email, password, role }
       VALUES (?, ?, ?, ?, 1, ?, ?)
     `).run(id, normalizedEmail, name, hashPassword(password), now, now);
     db.prepare(`
-      INSERT INTO memberships (user_id, organization_id, role, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, organizationId, role, now, now);
+      INSERT INTO memberships
+      (user_id, organization_id, role, operational_role, chatwoot_agent_id,
+       visibility_scope, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      organizationId,
+      membershipRole,
+      normalizedOperationalRole,
+      safeAgentId,
+      normalizedScope,
+      now,
+      now
+    );
   });
   logAudit({
     organizationId,
@@ -592,24 +747,77 @@ function createUser({ organizationId, actorUserId, name, email, password, role }
     action: "user.created",
     entityType: "user",
     entityId: id,
-    after: { name, email: normalizedEmail, role },
+    after: {
+      name,
+      email: normalizedEmail,
+      role: membershipRole,
+      operationalRole: normalizedOperationalRole,
+      chatwootAgentId: safeAgentId,
+      visibilityScope: normalizedScope,
+    },
   });
   return listUsers(organizationId).find((user) => user.id === id);
 }
 
-function updateUser({ organizationId, actorUserId, userId, role, active, name, password }) {
+function updateUser({
+  organizationId,
+  actorUserId,
+  userId,
+  role,
+  operationalRole,
+  chatwootAgentId,
+  visibilityScope,
+  active,
+  name,
+  password,
+}) {
   const current = db.prepare(`
-    SELECT u.*, m.role FROM users u
+    SELECT u.*, m.role, m.operational_role, m.chatwoot_agent_id, m.visibility_scope
+    FROM users u
     JOIN memberships m ON m.user_id = u.id
     WHERE u.id = ? AND m.organization_id = ?
   `).get(userId, organizationId);
   if (!current) return null;
+
+  const nextOperationalRole = normalizeOperationalProfile(
+    operationalRole || role || current.operational_role,
+    current.role
+  );
+  const nextMembershipRole = OPERATIONAL_PROFILES[nextOperationalRole]?.membershipRole || current.role;
+  const nextVisibilityScope = normalizeVisibilityScope(
+    visibilityScope || current.visibility_scope,
+    nextOperationalRole
+  );
+  const requestedAgentId = chatwootAgentId === undefined
+    ? current.chatwoot_agent_id
+    : Number(chatwootAgentId);
+  const nextAgentId = Number.isInteger(Number(requestedAgentId)) && Number(requestedAgentId) > 0
+    ? Number(requestedAgentId)
+    : null;
+
+  if (["sdr", "seller"].includes(nextOperationalRole) && !nextAgentId) {
+    const error = new Error("Vincule o usuário a um agente do Chatwoot");
+    error.status = 400;
+    throw error;
+  }
+
   const now = nowIso();
   transaction(() => {
     db.prepare("UPDATE users SET name = ?, active = ?, updated_at = ? WHERE id = ?")
       .run(name || current.name, active === undefined ? current.active : active ? 1 : 0, now, userId);
-    db.prepare("UPDATE memberships SET role = ?, updated_at = ? WHERE user_id = ? AND organization_id = ?")
-      .run(role || current.role, now, userId, organizationId);
+    db.prepare(`
+      UPDATE memberships
+      SET role = ?, operational_role = ?, chatwoot_agent_id = ?, visibility_scope = ?, updated_at = ?
+      WHERE user_id = ? AND organization_id = ?
+    `).run(
+      nextMembershipRole,
+      nextOperationalRole,
+      nextAgentId,
+      nextVisibilityScope,
+      now,
+      userId,
+      organizationId
+    );
     if (password) {
       db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
         .run(hashPassword(password), now, userId);
@@ -621,8 +829,22 @@ function updateUser({ organizationId, actorUserId, userId, role, active, name, p
     action: "user.updated",
     entityType: "user",
     entityId: userId,
-    before: { name: current.name, active: Boolean(current.active), role: current.role },
-    after: { name: name || current.name, active: active === undefined ? Boolean(current.active) : Boolean(active), role: role || current.role },
+    before: {
+      name: current.name,
+      active: Boolean(current.active),
+      role: current.role,
+      operationalRole: current.operational_role,
+      chatwootAgentId: current.chatwoot_agent_id,
+      visibilityScope: current.visibility_scope,
+    },
+    after: {
+      name: name || current.name,
+      active: active === undefined ? Boolean(current.active) : Boolean(active),
+      role: nextMembershipRole,
+      operationalRole: nextOperationalRole,
+      chatwootAgentId: nextAgentId,
+      visibilityScope: nextVisibilityScope,
+    },
   });
   return listUsers(organizationId).find((user) => user.id === userId);
 }
@@ -661,6 +883,172 @@ function syncTaskFromAttributes({ organizationId, conversationId, attributes, ac
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, organizationId, conversationId, title, dueDate, status, completedAt, actorUserId, actorUserId, now, now);
   return id;
+}
+
+function conversationLabelNames(conversation) {
+  const labels = conversation?.labels || conversation?.label_list || [];
+  if (!Array.isArray(labels)) return [];
+  return [...new Set(labels.map((label) => String(label?.title || label?.name || label || "").trim()).filter(Boolean))];
+}
+
+function conversationAssigneeId(conversation) {
+  const raw =
+    conversation?.meta?.assignee?.id ??
+    conversation?.assignee?.id ??
+    conversation?.assignee_id ??
+    null;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function interventionLabelsForConversation(conversation) {
+  const interventionKeys = new Set(["precisa-humano", "atendimento-manual"]);
+  return conversationLabelNames(conversation).filter((label) =>
+    interventionKeys.has(String(label).toLocaleLowerCase("pt-BR"))
+  );
+}
+
+function syncInterventions({ organizationId, conversations }) {
+  const now = nowIso();
+  const seen = new Set();
+  const activeRows = db.prepare(
+    "SELECT * FROM interventions WHERE organization_id = ? AND status != 'resolved'"
+  ).all(organizationId);
+  const activeByConversation = new Map(activeRows.map((row) => [Number(row.conversation_id), row]));
+  const upsert = db.prepare(`
+    INSERT INTO interventions
+    (id, organization_id, conversation_id, status, trigger_labels_json, assignee_agent_id,
+     first_detected_at, last_detected_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(organization_id, conversation_id) DO UPDATE SET
+      status = excluded.status,
+      trigger_labels_json = excluded.trigger_labels_json,
+      assignee_agent_id = excluded.assignee_agent_id,
+      last_detected_at = excluded.last_detected_at,
+      resolved_by_user_id = NULL,
+      resolved_at = NULL,
+      updated_at = excluded.updated_at
+  `);
+
+  for (const conversation of Array.isArray(conversations) ? conversations : []) {
+    const labels = interventionLabelsForConversation(conversation);
+    if (!labels.length) continue;
+    const conversationId = Number(conversation.id);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) continue;
+    seen.add(conversationId);
+    const status = labels.some((label) => String(label).toLocaleLowerCase("pt-BR") === "atendimento-manual")
+      ? "assumed"
+      : "open";
+    const previous = activeByConversation.get(conversationId);
+    upsert.run(
+      previous?.id || crypto.randomUUID(),
+      organizationId,
+      conversationId,
+      status,
+      JSON.stringify(labels),
+      conversationAssigneeId(conversation),
+      previous?.first_detected_at || now,
+      now,
+      now
+    );
+    if (!previous) {
+      logAudit({
+        organizationId,
+        action: "intervention.detected",
+        entityType: "conversation",
+        entityId: conversationId,
+        after: { labels, status },
+      });
+    }
+  }
+
+  for (const row of activeRows) {
+    const conversationId = Number(row.conversation_id);
+    if (seen.has(conversationId)) continue;
+    db.prepare(`
+      UPDATE interventions
+      SET status = 'resolved', resolved_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, now, row.id);
+    logAudit({
+      organizationId,
+      action: "intervention.auto_resolved",
+      entityType: "conversation",
+      entityId: conversationId,
+      before: { status: row.status, labels: safeJsonParse(row.trigger_labels_json, []) },
+      after: { status: "resolved" },
+    });
+  }
+}
+
+function markInterventionAssumed({ organizationId, conversationId, actorUserId, agentId, labels }) {
+  const now = nowIso();
+  const existing = db.prepare(
+    "SELECT * FROM interventions WHERE organization_id = ? AND conversation_id = ?"
+  ).get(organizationId, conversationId);
+  db.prepare(`
+    INSERT INTO interventions
+    (id, organization_id, conversation_id, status, trigger_labels_json, assignee_agent_id,
+     first_detected_at, last_detected_at, assumed_by_user_id, assumed_at, updated_at)
+    VALUES (?, ?, ?, 'assumed', ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(organization_id, conversation_id) DO UPDATE SET
+      status = 'assumed',
+      trigger_labels_json = excluded.trigger_labels_json,
+      assignee_agent_id = excluded.assignee_agent_id,
+      last_detected_at = excluded.last_detected_at,
+      assumed_by_user_id = excluded.assumed_by_user_id,
+      assumed_at = excluded.assumed_at,
+      resolved_by_user_id = NULL,
+      resolved_at = NULL,
+      updated_at = excluded.updated_at
+  `).run(
+    existing?.id || crypto.randomUUID(),
+    organizationId,
+    conversationId,
+    JSON.stringify(labels || ["atendimento-manual"]),
+    agentId || null,
+    existing?.first_detected_at || now,
+    now,
+    actorUserId,
+    now,
+    now
+  );
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "intervention.assumed",
+    entityType: "conversation",
+    entityId: conversationId,
+    before: existing ? { status: existing.status } : null,
+    after: { status: "assumed", agentId, labels },
+  });
+}
+
+function markInterventionResolved({ organizationId, conversationId, actorUserId }) {
+  const now = nowIso();
+  const existing = db.prepare(
+    "SELECT * FROM interventions WHERE organization_id = ? AND conversation_id = ?"
+  ).get(organizationId, conversationId);
+  if (existing) {
+    db.prepare(`
+      UPDATE interventions
+      SET status = 'resolved', resolved_by_user_id = ?, resolved_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(actorUserId, now, now, existing.id);
+  }
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "intervention.resolved",
+    entityType: "conversation",
+    entityId: conversationId,
+    before: existing ? { status: existing.status, labels: safeJsonParse(existing.trigger_labels_json, []) } : null,
+    after: { status: "resolved" },
+  });
+}
+
+function closeDatabase() {
+  db.close();
 }
 
 function logAudit({ organizationId, actorUserId = null, action, entityType, entityId = null, before = null, after = null, metadata = null }) {
@@ -709,6 +1097,7 @@ function listAudit(organizationId, limit = 50) {
 module.exports = {
   DEFAULT_STAGES,
   ROLE_PERMISSIONS,
+  OPERATIONAL_PROFILES,
   databasePath,
   bootstrapFromEnv,
   authenticate,
@@ -726,6 +1115,10 @@ module.exports = {
   createUser,
   updateUser,
   syncTaskFromAttributes,
+  syncInterventions,
+  markInterventionAssumed,
+  markInterventionResolved,
   logAudit,
   listAudit,
+  closeDatabase,
 };

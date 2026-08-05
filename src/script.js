@@ -16,6 +16,7 @@ const STORAGE_KEYS = {
 };
 
 const PAGE_SIZE = 25;
+const INTERVENTION_LABELS = new Set(["precisa-humano", "atendimento-manual"]);
 
 const state = {
   accountId: null,
@@ -51,6 +52,9 @@ const state = {
   syncStatusTimer: null,
   isLoadingWorkspace: false,
   labelDraft: new Set(),
+  interventionFilter: "all",
+  interventionCount: 0,
+  organizationConversationCount: 0,
 };
 
 const elements = {};
@@ -184,6 +188,90 @@ function getLabels(conversation) {
   const labels = conversation?.labels || conversation?.label_list || [];
   if (!Array.isArray(labels)) return [];
   return [...new Set(labels.map(getLabelTitle).filter(Boolean))];
+}
+
+function getAssigneeId(conversation) {
+  const id = Number(getAssignee(conversation)?.id || conversation?.assignee_id || 0);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function interventionLabels(conversation) {
+  return getLabels(conversation).filter((label) => INTERVENTION_LABELS.has(safeLower(label)));
+}
+
+function isIntervention(conversation) {
+  return interventionLabels(conversation).length > 0;
+}
+
+function isMine(conversation) {
+  const linkedAgentId = Number(state.user?.chatwootAgentId || 0);
+  return linkedAgentId > 0 && getAssigneeId(conversation) === linkedAgentId;
+}
+
+function belongsToCurrentScope(conversation) {
+  const scope = state.user?.visibilityScope || "all";
+  if (scope === "all") return true;
+  const assigneeId = getAssigneeId(conversation);
+  const linkedAgentId = Number(state.user?.chatwootAgentId || 0);
+  if (scope === "mine") return linkedAgentId > 0 && assigneeId === linkedAgentId;
+  if (scope === "unassigned_and_mine") {
+    return !assigneeId || (linkedAgentId > 0 && assigneeId === linkedAgentId);
+  }
+  if (scope === "unassigned") return !assigneeId;
+  return false;
+}
+
+function operationalStageIds() {
+  const role = state.user?.operationalRole || state.user?.role;
+  if (role === "sdr") return new Set(["new", "contacted", "qualification"]);
+  if (role === "seller") return new Set(["proposal", "negotiation", "won", "lost"]);
+  return new Set(getVisiblePipelineStages().map((stage) => stage.id));
+}
+
+function getOperationalPipelineStages() {
+  const allowed = operationalStageIds();
+  return getVisiblePipelineStages().filter((stage) => allowed.has(stage.id));
+}
+
+function todayKey() {
+  const date = new Date();
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function operationalPriority(conversation) {
+  if (isIntervention(conversation)) return 0;
+  const taskStatus = getTaskStatus(conversation);
+  if (taskStatus === "overdue") return 1;
+  const attributes = getCustomAttributes(conversation);
+  if (taskStatus === "pending" && attributes.crm_task_due_at === todayKey()) return 2;
+  if (!getAssigneeId(conversation)) return 3;
+  if (Date.now() - conversationActivityTimestamp(conversation) >= 24 * 60 * 60 * 1000) return 4;
+  if (!String(attributes.crm_next_task || "").trim()) return 5;
+  return 6;
+}
+
+function sortOperationalQueue(conversations) {
+  return [...conversations].sort((a, b) => {
+    const priority = operationalPriority(a) - operationalPriority(b);
+    if (priority !== 0) return priority;
+    return conversationActivityTimestamp(b) - conversationActivityTimestamp(a);
+  });
+}
+
+function focusReason(conversation) {
+  if (isIntervention(conversation)) return "Intervenção humana";
+  const taskStatus = getTaskStatus(conversation);
+  if (taskStatus === "overdue") return "Tarefa vencida";
+  const attributes = getCustomAttributes(conversation);
+  if (taskStatus === "pending" && attributes.crm_task_due_at === todayKey()) return "Retorno para hoje";
+  if (!getAssigneeId(conversation)) return "Sem responsável";
+  if (Date.now() - conversationActivityTimestamp(conversation) >= 24 * 60 * 60 * 1000) return "Lead parado";
+  if (!String(attributes.crm_next_task || "").trim()) return "Sem próxima tarefa";
+  return "Acompanhar oportunidade";
 }
 
 function normalizeLabelColor(value) {
@@ -494,10 +582,21 @@ function renderIdentity() {
   elements.settingsAccountId.textContent = String(state.accountId);
   if (elements.settingsOrganizationName) elements.settingsOrganizationName.textContent = state.organization.name;
   if (elements.settingsCurrentUser) {
-    elements.settingsCurrentUser.textContent = `${state.user.name} · ${roleLabel(state.user.role)}`;
+    elements.settingsCurrentUser.textContent = `${state.user.name} · ${roleLabel(state.user.operationalRole || state.user.role)}`;
   }
   if (elements.sidebarUserName) elements.sidebarUserName.textContent = state.user.name;
-  if (elements.sidebarUserRole) elements.sidebarUserRole.textContent = roleLabel(state.user.role);
+  if (elements.sidebarUserRole) {
+    elements.sidebarUserRole.textContent = roleLabel(state.user.operationalRole || state.user.role);
+  }
+  if (elements.settingsCurrentScope) {
+    elements.settingsCurrentScope.textContent = scopeLabel(state.user.visibilityScope);
+  }
+  if (elements.settingsLinkedAgent) {
+    const agent = state.agents.find(
+      (item) => Number(item.id) === Number(state.user.chatwootAgentId)
+    );
+    elements.settingsLinkedAgent.textContent = agent?.name || (state.user.chatwootAgentId ? `Agente #${state.user.chatwootAgentId}` : "Não vinculado");
+  }
   elements.pipelineSettingsPanel?.classList.toggle("is-readonly", !hasPermission("pipeline:manage"));
   elements.userManagementPanel?.classList.toggle("is-hidden", !hasPermission("users:manage"));
   elements.auditPanel?.classList.toggle("is-hidden", !hasPermission("audit:read"));
@@ -512,9 +611,28 @@ function roleLabel(role) {
   return {
     admin: "Administrador",
     manager: "Gerente",
+    sdr: "SDR",
+    seller: "Vendedor",
     agent: "Atendente",
     viewer: "Somente leitura",
   }[role] || role || "Usuário";
+}
+
+function scopeLabel(scope, operationalRole = state.user?.operationalRole) {
+  if (operationalRole === "sdr") {
+    return {
+      all: "Todos os leads",
+      mine: "Somente meus leads",
+      unassigned_and_mine: "Fila SDR + meus leads",
+      unassigned: "Somente fila SDR sem responsável",
+    }[scope] || scope || "Não configurado";
+  }
+  return {
+    all: "Todos os leads",
+    mine: "Somente meus leads",
+    unassigned_and_mine: "Sem responsável + meus leads",
+    unassigned: "Somente leads sem responsável",
+  }[scope] || scope || "Não configurado";
 }
 
 async function initializeSession() {
@@ -586,27 +704,7 @@ async function logout() {
 }
 
 async function fetchAllConversations() {
-  const conversations = [];
-  const seenIds = new Set();
-
-  for (let page = 1; page <= 100; page += 1) {
-    const data = await apiRequest(
-      `/api/v1/accounts/${state.accountId}/conversations?status=all&assignee_type=all&page=${page}`
-    );
-    const payload = data?.data?.payload || data?.payload || data?.data || [];
-    if (!Array.isArray(payload) || payload.length === 0) break;
-
-    for (const conversation of payload) {
-      if (!seenIds.has(conversation.id)) {
-        seenIds.add(conversation.id);
-        conversations.push(conversation);
-      }
-    }
-
-    if (payload.length < PAGE_SIZE) break;
-  }
-
-  return conversations;
+  return apiRequest("/api/crm/workspace/conversations");
 }
 
 async function loadWorkspace(options = {}) {
@@ -620,7 +718,7 @@ async function loadWorkspace(options = {}) {
       await loadCentralConfiguration({ skipRender: true });
       renderIdentity();
     }
-    const [conversations, agents, teams, inboxData, labelsData] = await Promise.all([
+    const [conversationResult, agents, teams, inboxData, labelsData] = await Promise.all([
       fetchAllConversations(),
       apiRequest(`/api/v1/accounts/${state.accountId}/agents`).catch(() => []),
       apiRequest(`/api/v1/accounts/${state.accountId}/teams`).catch(() => []),
@@ -628,16 +726,24 @@ async function loadWorkspace(options = {}) {
       apiRequest(`/api/v1/accounts/${state.accountId}/labels`).catch(() => ({ payload: [] })),
     ]);
 
-    state.conversations = conversations.sort(
-      (a, b) => conversationActivityTimestamp(b) - conversationActivityTimestamp(a)
+    const conversations = Array.isArray(conversationResult?.conversations)
+      ? conversationResult.conversations
+      : [];
+    state.conversations = sortOperationalQueue(conversations);
+    state.interventionCount = Number(conversationResult?.interventionCount || 0);
+    state.organizationConversationCount = Number(
+      conversationResult?.totalOrganization || conversations.length
     );
     state.agents = Array.isArray(agents) ? agents : agents?.payload || [];
     state.teams = Array.isArray(teams) ? teams : teams?.payload || [];
     state.inboxes = Array.isArray(inboxData) ? inboxData : inboxData?.payload || [];
     state.labels = Array.isArray(labelsData) ? labelsData : labelsData?.payload || [];
 
+    if (hasPermission("users:manage")) renderUsers();
+    renderIdentity();
     populateFilterOptions();
     populateDrawerOptions();
+    populateUserAgentOptions();
     restoreActiveFilterPreset();
     renderFilterPresets();
     renderStageManager();
@@ -714,10 +820,12 @@ function filteredConversations() {
 
 function renderAll() {
   renderDashboard();
+  renderInterventions();
   renderPipeline();
   renderConversationsTable();
   renderTasks();
   renderContacts();
+  updateInterventionNavigation();
 }
 
 function renderDashboard() {
@@ -747,7 +855,7 @@ function renderDashboard() {
     {
       label: "Oportunidades abertas",
       value: openOpportunities.length,
-      help: `${conversations.length} conversas sincronizadas`,
+      help: `${conversations.length} no seu escopo · ${state.organizationConversationCount} na organização`,
     },
     {
       label: "Valor em pipeline",
@@ -763,6 +871,11 @@ function renderDashboard() {
       label: "Tarefas vencidas",
       value: overdueTasks.length,
       help: `${pendingTasks.length} tarefas pendentes`,
+    },
+    {
+      label: "Intervenções humanas",
+      value: conversations.filter(isIntervention).length,
+      help: "Falhas ou atendimentos manuais no seu escopo",
     },
   ];
 
@@ -786,14 +899,14 @@ function renderStageOverview(conversations) {
   elements.stageOverview.replaceChildren();
   const maximum = Math.max(
     1,
-    ...getVisiblePipelineStages().map(
+    ...getOperationalPipelineStages().map(
       (stage) => conversations.filter((conversation) => getConversationStage(conversation) === stage.id).length
     )
   );
 
-  for (const stage of getVisiblePipelineStages()) {
-    const stageConversations = conversations.filter(
-      (conversation) => getConversationStage(conversation) === stage.id
+  for (const stage of getOperationalPipelineStages()) {
+    const stageConversations = sortOperationalQueue(
+      conversations.filter((conversation) => getConversationStage(conversation) === stage.id)
     );
     const value = stageConversations.reduce(
       (sum, conversation) => sum + parseCurrency(getCustomAttributes(conversation).crm_value),
@@ -811,36 +924,38 @@ function renderStageOverview(conversations) {
   }
 }
 
-function renderDashboardTasks(tasks) {
+function renderDashboardTasks() {
   elements.dashboardTasks.replaceChildren();
-  const sortedTasks = [...tasks].sort((a, b) => {
-    const aDate = getCustomAttributes(a).crm_task_due_at || "9999-12-31";
-    const bDate = getCustomAttributes(b).crm_task_due_at || "9999-12-31";
-    return aDate.localeCompare(bDate);
-  });
+  const queue = sortOperationalQueue(state.conversations).slice(0, 8);
 
-  if (!sortedTasks.length) {
-    elements.dashboardTasks.appendChild(createElement("div", "empty-state", "Nenhuma tarefa pendente."));
+  if (!queue.length) {
+    elements.dashboardTasks.appendChild(
+      createElement("div", "empty-state", "Nenhuma obrigação pendente no seu escopo.")
+    );
     return;
   }
 
-  for (const conversation of sortedTasks.slice(0, 6)) {
+  for (const conversation of queue) {
     const sender = getSender(conversation);
     const attributes = getCustomAttributes(conversation);
-    const item = createElement("div", "compact-item");
+    const item = createElement(
+      "div",
+      `compact-item focus-item ${isIntervention(conversation) ? "is-intervention" : ""}`
+    );
     const button = createElement("button");
     button.type = "button";
     button.append(
-      createElement("strong", null, attributes.crm_next_task),
+      createElement("strong", null, focusReason(conversation)),
       createElement("span", null, sender.name || `Conversa #${conversation.id}`)
     );
     button.addEventListener("click", () => openOpportunityDrawer(conversation.id));
-    const due = createElement(
+    const detail = createElement(
       "span",
-      `task-due ${isOverdue(attributes.crm_task_due_at) ? "overdue" : ""}`,
-      attributes.crm_task_due_at ? formatDate(attributes.crm_task_due_at, { dateOnly: true }) : "Sem prazo"
+      "focus-item-detail",
+      attributes.crm_next_task ||
+        `${formatRelativeTime(conversationActivityTimestamp(conversation))} sem interação`
     );
-    item.append(button, due);
+    item.append(button, detail);
     elements.dashboardTasks.appendChild(item);
   }
 }
@@ -870,6 +985,122 @@ function renderRecentConversations(conversations) {
   }
 }
 
+function updateInterventionNavigation() {
+  const count = state.conversations.filter(isIntervention).length;
+  state.interventionCount = count;
+  if (elements.interventionNavCount) {
+    elements.interventionNavCount.textContent = String(count);
+    elements.interventionNavCount.classList.toggle("is-hidden", count === 0);
+  }
+  if (elements.interventionViewCount) {
+    elements.interventionViewCount.textContent = String(count);
+  }
+}
+
+function renderInterventions() {
+  if (!elements.interventionList) return;
+  const linkedAgentId = Number(state.user?.chatwootAgentId || 0);
+  let conversations = state.conversations.filter(isIntervention);
+  if (state.interventionFilter === "unassigned") {
+    conversations = conversations.filter((conversation) => !getAssigneeId(conversation));
+  } else if (state.interventionFilter === "mine") {
+    conversations = conversations.filter(
+      (conversation) => linkedAgentId > 0 && getAssigneeId(conversation) === linkedAgentId
+    );
+  }
+  conversations = sortOperationalQueue(conversations);
+  elements.interventionList.replaceChildren();
+
+  if (!conversations.length) {
+    elements.interventionList.appendChild(
+      createElement("div", "empty-state intervention-empty", "Nenhuma intervenção pendente neste filtro.")
+    );
+    updateInterventionNavigation();
+    return;
+  }
+
+  for (const conversation of conversations) {
+    const sender = getSender(conversation);
+    const assignee = getAssignee(conversation);
+    const item = createElement("article", "intervention-card");
+    const header = createElement("div", "intervention-card-header");
+    const info = createElement("div");
+    info.append(
+      createElement("span", "intervention-kicker", "⚠ INTERVENÇÃO HUMANA"),
+      createElement("strong", null, sender.name || `Conversa #${conversation.id}`),
+      createElement("small", null, `#${conversation.id} · ${getStage(getConversationStage(conversation)).label}`)
+    );
+    const age = createElement(
+      "span",
+      "intervention-age",
+      `${formatRelativeTime(conversationActivityTimestamp(conversation))} sem interação`
+    );
+    header.append(info, age);
+
+    const details = createElement("div", "intervention-card-details");
+    details.append(
+      createElement(
+        "span",
+        null,
+        interventionLabels(conversation).map((label) => getLabelTitle(label)).join(" · ")
+      ),
+      createElement("span", null, assignee?.name ? `Responsável: ${assignee.name}` : "Sem responsável")
+    );
+
+    const actions = createElement("div", "intervention-actions");
+    const open = createElement("button", "button button-ghost button-small", "Abrir");
+    open.type = "button";
+    open.addEventListener("click", () => openOpportunityDrawer(conversation.id));
+    actions.appendChild(open);
+
+    if (hasPermission("interventions:manage")) {
+      const assume = createElement("button", "button button-primary button-small", "Assumir");
+      assume.type = "button";
+      assume.disabled = !state.user?.chatwootAgentId;
+      assume.title = assume.disabled ? "Vincule seu usuário a um agente do Chatwoot" : "";
+      assume.addEventListener("click", () => assumeIntervention(conversation.id));
+      const resolve = createElement("button", "button button-ghost button-small", "Resolver e liberar");
+      resolve.type = "button";
+      resolve.addEventListener("click", () => resolveIntervention(conversation.id));
+      actions.append(assume, resolve);
+    }
+
+    item.append(header, details, actions);
+    elements.interventionList.appendChild(item);
+  }
+  updateInterventionNavigation();
+}
+
+async function assumeIntervention(conversationId) {
+  if (!hasPermission("interventions:manage")) return;
+  try {
+    await apiRequest(`/api/crm/interventions/${conversationId}/assume`, { method: "POST" });
+    showToast("Intervenção assumida. A automação permanece bloqueada.", "success");
+    await loadWorkspace({ background: true });
+    if (state.currentConversationId === Number(conversationId)) {
+      await openOpportunityDrawer(conversationId);
+    }
+  } catch (error) {
+    showToast(`Não foi possível assumir: ${error.message}`, "error");
+  }
+}
+
+async function resolveIntervention(conversationId) {
+  if (!hasPermission("interventions:manage")) return;
+  const confirmed = window.confirm(
+    "Remover as etiquetas de intervenção e liberar este lead para o fluxo automático?"
+  );
+  if (!confirmed) return;
+  try {
+    await apiRequest(`/api/crm/interventions/${conversationId}/resolve`, { method: "POST" });
+    showToast("Intervenção resolvida e etiquetas de bloqueio removidas.", "success");
+    await loadWorkspace({ background: true });
+    if (state.currentConversationId === Number(conversationId)) closeOpportunityDrawer();
+  } catch (error) {
+    showToast(`Não foi possível resolver: ${error.message}`, "error");
+  }
+}
+
 function renderPipeline() {
   const conversations = filteredConversations();
   elements.pipelineBoard.replaceChildren();
@@ -877,16 +1108,45 @@ function renderPipeline() {
     conversations.length === 1 ? "oportunidade exibida" : "oportunidades exibidas"
   }`;
 
-  for (const stage of getVisiblePipelineStages()) {
-    const stageConversations = conversations.filter(
-      (conversation) => getConversationStage(conversation) === stage.id
-    );
+  const roleStages = getOperationalPipelineStages();
+  const allowedStageIds = new Set(roleStages.map((stage) => stage.id));
+  const pendingAlignment = sortOperationalQueue(
+    conversations.filter((conversation) => !allowedStageIds.has(getConversationStage(conversation)))
+  );
+  const columns = pendingAlignment.length
+    ? [
+        {
+          id: "__pending_alignment",
+          label: "Pendente de enquadramento",
+          color: "#dc2626",
+          virtual: true,
+          conversations: pendingAlignment,
+        },
+        ...roleStages.map((stage) => ({
+          ...stage,
+          conversations: sortOperationalQueue(
+            conversations.filter((conversation) => getConversationStage(conversation) === stage.id)
+          ),
+        })),
+      ]
+    : roleStages.map((stage) => ({
+        ...stage,
+        conversations: sortOperationalQueue(
+          conversations.filter((conversation) => getConversationStage(conversation) === stage.id)
+        ),
+      }));
+
+  for (const stage of columns) {
+    const stageConversations = stage.conversations;
     const stageValue = stageConversations.reduce(
       (sum, conversation) => sum + parseCurrency(getCustomAttributes(conversation).crm_value),
       0
     );
 
-    const column = createElement("section", "pipeline-column");
+    const column = createElement(
+      "section",
+      `pipeline-column${stage.virtual ? " pipeline-column-warning" : ""}`
+    );
     column.dataset.stage = stage.id;
     const header = createElement("header", "pipeline-column-header");
     const title = createElement("div", "pipeline-title");
@@ -906,10 +1166,10 @@ function renderPipeline() {
       list.appendChild(createOpportunityCard(conversation));
     }
     if (!stageConversations.length) {
-      list.appendChild(createElement("div", "pipeline-empty", "Arraste uma oportunidade para esta etapa"));
+      list.appendChild(createElement("div", "pipeline-empty", "Nenhuma oportunidade nesta etapa"));
     }
 
-    if (hasPermission("opportunities:write")) {
+    if (hasPermission("opportunities:write") && !stage.virtual) {
       column.addEventListener("dragover", (event) => {
         event.preventDefault();
         column.classList.add("is-drag-over");
@@ -937,7 +1197,10 @@ function createOpportunityCard(conversation) {
   const inbox = getInbox(conversation);
   const labels = getLabels(conversation);
   const taskStatus = getTaskStatus(conversation);
-  const card = createElement("article", `opportunity-card ${idleClass(conversation)}`);
+  const card = createElement(
+    "article",
+    `opportunity-card ${idleClass(conversation)}${isIntervention(conversation) ? " is-intervention" : ""}`
+  );
   card.draggable = hasPermission("opportunities:write");
   card.dataset.id = String(conversation.id);
   card.title = `Conversa #${conversation.id} · ${formatDate(
@@ -952,6 +1215,21 @@ function createOpportunityCard(conversation) {
   card.appendChild(top);
   card.appendChild(createElement("div", "card-phone", sender.phone_number || sender.email || "Sem contato"));
   card.appendChild(createElement("div", "card-message", getLastMessage(conversation)));
+
+  if (isIntervention(conversation)) {
+    const warning = createElement("div", "card-intervention-warning");
+    warning.append(
+      createElement("strong", null, "⚠ Intervenção humana"),
+      createElement(
+        "span",
+        null,
+        interventionLabels(conversation).some((label) => safeLower(label) === "atendimento-manual")
+          ? "Atendimento manual em andamento"
+          : "Fluxo aguardando ação humana"
+      )
+    );
+    card.appendChild(warning);
+  }
 
   const badges = createElement("div", "card-badges");
   if (conversation.priority && conversation.priority !== "none") {
@@ -1040,6 +1318,16 @@ function createOpportunityCard(conversation) {
       if (action === "chatwoot") return openInChatwootById(conversation.id);
     });
     quickActions.appendChild(button);
+  }
+  if (isIntervention(conversation) && hasPermission("interventions:manage")) {
+    const assume = createElement("button", "card-intervention-action", "Assumir");
+    assume.type = "button";
+    assume.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await assumeIntervention(conversation.id);
+    });
+    quickActions.prepend(assume);
   }
   card.appendChild(quickActions);
 
@@ -1589,6 +1877,19 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   elements.drawerTaskCompletedAt.dataset.value = attributes.crm_task_completed_at || "";
   elements.drawerLossReason.value = attributes.crm_loss_reason || "";
   const canWrite = hasPermission("opportunities:write");
+  const canAssign = hasPermission("assignments:manage");
+  elements.drawerInterventionPanel.classList.toggle("is-hidden", !isIntervention(conversation));
+  if (isIntervention(conversation)) {
+    const labels = interventionLabels(conversation);
+    elements.drawerInterventionTitle.textContent = labels.some(
+      (label) => safeLower(label) === "atendimento-manual"
+    )
+      ? "Atendimento manual em andamento"
+      : "Ação humana necessária";
+    elements.drawerInterventionDescription.textContent = labels.join(" · ");
+    elements.assumeIntervention.disabled = !hasPermission("interventions:manage") || !state.user?.chatwootAgentId;
+    elements.resolveIntervention.disabled = !hasPermission("interventions:manage");
+  }
   [
     elements.drawerStage,
     elements.drawerValue,
@@ -1602,6 +1903,8 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   ].forEach((element) => {
     element.disabled = !canWrite;
   });
+  elements.drawerAssignee.disabled = !canAssign;
+  elements.drawerTeam.disabled = !canAssign;
   elements.saveOpportunity.disabled = !canWrite;
   elements.replyContent.disabled = !hasPermission("messages:send");
   elements.replyPrivate.disabled = !hasPermission("messages:send");
@@ -1775,7 +2078,10 @@ async function saveOpportunity() {
     const selectedAssignee = elements.drawerAssignee.value;
     const selectedTeam = elements.drawerTeam.value;
 
-    if (selectedAssignee !== currentAssigneeId || (!selectedAssignee && selectedTeam !== currentTeamId)) {
+    if (
+      hasPermission("assignments:manage") &&
+      (selectedAssignee !== currentAssigneeId || (!selectedAssignee && selectedTeam !== currentTeamId))
+    ) {
       const assignment = {};
       if (selectedAssignee) assignment.assignee_id = Number(selectedAssignee);
       else if (selectedTeam) assignment.team_id = Number(selectedTeam);
@@ -1799,6 +2105,13 @@ async function saveOpportunity() {
     conversation.meta.team = selectedTeam
       ? state.teams.find((team) => String(team.id) === selectedTeam) || null
       : null;
+
+    if (!belongsToCurrentScope(conversation)) {
+      state.conversations = state.conversations.filter(
+        (item) => Number(item.id) !== Number(conversation.id)
+      );
+      closeOpportunityDrawer();
+    }
 
     elements.drawerTaskCompletedAt.dataset.value = completedAt || "";
     updateDrawerTaskState();
@@ -2249,6 +2562,30 @@ async function loadAdministrationData(options = {}) {
   await Promise.all(requests);
 }
 
+function populateUserAgentOptions() {
+  if (!elements.crmUserAgent) return;
+  const current = elements.crmUserAgent.value;
+  fillSelect(
+    elements.crmUserAgent,
+    state.agents.map((agent) => ({ id: agent.id, name: agent.name || agent.email || `Agente #${agent.id}` })),
+    "Selecione o agente do Chatwoot"
+  );
+  if ([...elements.crmUserAgent.options].some((option) => option.value === current)) {
+    elements.crmUserAgent.value = current;
+  }
+}
+
+function defaultScopeForRole(role) {
+  return {
+    admin: "all",
+    manager: "all",
+    sdr: "unassigned_and_mine",
+    seller: "mine",
+    agent: "all",
+    viewer: "all",
+  }[role] || "all";
+}
+
 function renderUsers() {
   if (!elements.crmUsersList) return;
   elements.crmUsersList.replaceChildren();
@@ -2257,25 +2594,71 @@ function renderUsers() {
     return;
   }
   for (const user of state.users) {
-    const row = createElement("div", `crm-user-row ${user.active ? "" : "is-disabled"}`);
+    const row = createElement("div", `crm-user-row crm-user-row-operational ${user.active ? "" : "is-disabled"}`);
     const info = createElement("div", "crm-user-info");
+    const linkedAgent = state.agents.find(
+      (agent) => Number(agent.id) === Number(user.chatwootAgentId)
+    );
     info.append(
       createElement("strong", null, user.name),
-      createElement("span", null, `${user.email} · ${roleLabel(user.role)}`)
+      createElement(
+        "span",
+        null,
+        `${user.email} · ${roleLabel(user.operationalRole || user.role)} · ${scopeLabel(user.visibilityScope, user.operationalRole || user.role)}`
+      ),
+      createElement(
+        "small",
+        user.chatwootAgentId ? "linked-agent-ok" : "linked-agent-warning",
+        linkedAgent?.name || (user.chatwootAgentId ? `Agente #${user.chatwootAgentId}` : "Sem agente Chatwoot vinculado")
+      )
     );
-    const controls = createElement("div", "crm-user-actions");
+
+    const controls = createElement("div", "crm-user-actions crm-user-operational-controls");
     const role = document.createElement("select");
-    for (const value of ["admin", "manager", "agent", "viewer"]) {
+    for (const value of ["admin", "manager", "sdr", "seller", "viewer"]) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = roleLabel(value);
       role.appendChild(option);
     }
-    role.value = user.role;
+    role.value = user.operationalRole || user.role;
     role.disabled = user.id === state.user?.id;
     role.addEventListener("change", async () => {
-      await updateCrmUser(user.id, { role: role.value });
+      const nextScope = defaultScopeForRole(role.value);
+      await updateCrmUser(user.id, {
+        operationalRole: role.value,
+        visibilityScope: nextScope,
+        chatwootAgentId: agent.value || null,
+      });
     });
+
+    const agent = document.createElement("select");
+    fillSelect(
+      agent,
+      state.agents.map((item) => ({
+        id: item.id,
+        name: item.name || item.email || `Agente #${item.id}`,
+      })),
+      "Sem agente vinculado"
+    );
+    agent.value = user.chatwootAgentId ? String(user.chatwootAgentId) : "";
+    agent.addEventListener("change", () =>
+      updateCrmUser(user.id, { chatwootAgentId: agent.value || null })
+    );
+
+    const scope = document.createElement("select");
+    for (const value of ["all", "unassigned_and_mine", "mine", "unassigned"]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = scopeLabel(value, user.operationalRole || user.role);
+      scope.appendChild(option);
+    }
+    scope.value = user.visibilityScope || defaultScopeForRole(user.operationalRole || user.role);
+    scope.disabled = ["admin", "manager"].includes(user.operationalRole || user.role);
+    scope.addEventListener("change", () =>
+      updateCrmUser(user.id, { visibilityScope: scope.value })
+    );
+
     const resetPassword = createElement("button", "button button-ghost button-small", "Nova senha");
     resetPassword.type = "button";
     resetPassword.addEventListener("click", async () => {
@@ -2291,7 +2674,7 @@ function renderUsers() {
     active.type = "button";
     active.disabled = user.id === state.user?.id;
     active.addEventListener("click", () => updateCrmUser(user.id, { active: !user.active }));
-    controls.append(role, resetPassword, active);
+    controls.append(role, agent, scope, resetPassword, active);
     row.append(info, controls);
     elements.crmUsersList.appendChild(row);
   }
@@ -2304,7 +2687,9 @@ async function handleCrmUserCreate(event) {
     name: elements.crmUserName.value.trim(),
     email: elements.crmUserEmail.value.trim(),
     password: elements.crmUserPassword.value,
-    role: elements.crmUserRole.value,
+    operationalRole: elements.crmUserRole.value,
+    chatwootAgentId: elements.crmUserAgent.value || null,
+    visibilityScope: elements.crmUserScope.value,
   };
   elements.crmUserSubmit.disabled = true;
   try {
@@ -2315,7 +2700,8 @@ async function handleCrmUserCreate(event) {
     state.users.push(result.user);
     state.users.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
     elements.crmUserForm.reset();
-    elements.crmUserRole.value = "agent";
+    elements.crmUserRole.value = "sdr";
+    elements.crmUserScope.value = "unassigned_and_mine";
     renderUsers();
     await loadAdministrationData({ silent: true });
     showToast("Usuário criado com acesso centralizado.", "success");
@@ -2334,6 +2720,16 @@ async function updateCrmUser(userId, changes) {
     });
     const index = state.users.findIndex((item) => item.id === userId);
     if (index >= 0) state.users[index] = result.user;
+    if (userId === state.user?.id) {
+      state.user = {
+        ...state.user,
+        role: result.user.role,
+        operationalRole: result.user.operationalRole,
+        chatwootAgentId: result.user.chatwootAgentId,
+        visibilityScope: result.user.visibilityScope,
+      };
+      renderIdentity();
+    }
     renderUsers();
     await loadAdministrationData({ silent: true });
     showToast("Acesso do usuário atualizado.", "success");
@@ -2356,6 +2752,10 @@ function auditActionLabel(action) {
     "user.updated": "Atualizou um usuário",
     "opportunity.updated": "Atualizou uma oportunidade",
     "conversation.labels.updated": "Atualizou etiquetas da conversa",
+    "intervention.detected": "Detectou intervenção humana",
+    "intervention.assumed": "Assumiu intervenção humana",
+    "intervention.resolved": "Resolveu intervenção humana",
+    "intervention.auto_resolved": "Intervenção encerrada após remoção das etiquetas",
     "chatwoot.message.created": "Enviou mensagem ou nota",
     "chatwoot.post": "Executou alteração no Chatwoot",
     "chatwoot.patch": "Atualizou dados no Chatwoot",
@@ -2404,6 +2804,7 @@ function switchView(viewName) {
 
   const titles = {
     dashboard: ["VISÃO GERAL", "Dashboard comercial"],
+    interventions: ["AÇÃO IMEDIATA", "Intervenções humanas"],
     pipeline: ["OPORTUNIDADES", "Pipeline de vendas"],
     conversations: ["ATENDIMENTO", "Conversas do Chatwoot"],
     tasks: ["PRODUTIVIDADE", "Tarefas comerciais"],
@@ -2470,6 +2871,8 @@ function cacheElements() {
     settingsAccountId: byId("settings-account-id"),
     settingsOrganizationName: byId("settings-organization-name"),
     settingsCurrentUser: byId("settings-current-user"),
+    settingsCurrentScope: byId("settings-current-scope"),
+    settingsLinkedAgent: byId("settings-linked-agent"),
     pageEyebrow: byId("page-eyebrow"),
     pageTitle: byId("page-title"),
     globalSearch: byId("global-search"),
@@ -2477,6 +2880,9 @@ function cacheElements() {
     lastSync: byId("last-sync"),
     autoRefreshToggle: byId("auto-refresh-toggle"),
     metricsGrid: byId("metrics-grid"),
+    interventionNavCount: byId("intervention-nav-count"),
+    interventionViewCount: byId("intervention-view-count"),
+    interventionList: byId("intervention-list"),
     stageOverview: byId("stage-overview"),
     dashboardTasks: byId("dashboard-tasks"),
     recentConversations: byId("recent-conversations"),
@@ -2513,6 +2919,8 @@ function cacheElements() {
     crmUserEmail: byId("crm-user-email"),
     crmUserPassword: byId("crm-user-password"),
     crmUserRole: byId("crm-user-role"),
+    crmUserAgent: byId("crm-user-agent"),
+    crmUserScope: byId("crm-user-scope"),
     crmUserSubmit: byId("crm-user-submit"),
     crmUsersList: byId("crm-users-list"),
     auditPanel: byId("audit-panel"),
@@ -2523,6 +2931,11 @@ function cacheElements() {
     drawerConversationId: byId("drawer-conversation-id"),
     drawerContactName: byId("drawer-contact-name"),
     drawerContactMeta: byId("drawer-contact-meta"),
+    drawerInterventionPanel: byId("drawer-intervention-panel"),
+    drawerInterventionTitle: byId("drawer-intervention-title"),
+    drawerInterventionDescription: byId("drawer-intervention-description"),
+    assumeIntervention: byId("assume-intervention"),
+    resolveIntervention: byId("resolve-intervention"),
     drawerStage: byId("drawer-stage"),
     drawerValue: byId("drawer-value"),
     drawerPriority: byId("drawer-priority"),
@@ -2577,6 +2990,9 @@ function bindEvents() {
   elements.managePipeline.addEventListener("click", () => switchView("settings"));
   elements.stageManagerForm.addEventListener("submit", addPipelineStage);
   elements.crmUserForm?.addEventListener("submit", handleCrmUserCreate);
+  elements.crmUserRole?.addEventListener("change", () => {
+    elements.crmUserScope.value = defaultScopeForRole(elements.crmUserRole.value);
+  });
   elements.refreshAdministration?.addEventListener("click", () => loadAdministrationData({ silent: false }));
   elements.transitionForm.addEventListener("submit", confirmTransition);
   document.querySelectorAll("[data-close-transition]").forEach((element) => {
@@ -2591,6 +3007,12 @@ function bindEvents() {
   elements.saveLabels.addEventListener("click", saveDrawerLabels);
   elements.cancelLabels.addEventListener("click", cancelDrawerLabelChanges);
   elements.saveOpportunity.addEventListener("click", saveOpportunity);
+  elements.assumeIntervention.addEventListener("click", () => {
+    if (state.currentConversationId) assumeIntervention(state.currentConversationId);
+  });
+  elements.resolveIntervention.addEventListener("click", () => {
+    if (state.currentConversationId) resolveIntervention(state.currentConversationId);
+  });
   elements.openChatwoot.addEventListener("click", openInChatwoot);
   elements.reloadMessages.addEventListener("click", loadMessages);
   elements.replyForm.addEventListener("submit", sendReply);
@@ -2638,6 +3060,17 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.taskViewFilter = button.dataset.taskViewFilter || "all";
       renderTasks();
+    });
+  });
+
+  document.querySelectorAll("[data-intervention-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.interventionFilter = button.dataset.interventionFilter || "all";
+      document.querySelectorAll("[data-intervention-filter]").forEach((item) => {
+        item.classList.toggle("button-primary", item === button);
+        item.classList.toggle("button-ghost", item !== button);
+      });
+      renderInterventions();
     });
   });
 

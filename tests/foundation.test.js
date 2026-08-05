@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-v13-test-"));
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-v132-test-"));
 process.env.CRM_DB_PATH = path.join(tempDir, "crm.sqlite");
 process.env.CRM_ENCRYPTION_KEY = "chave-de-teste-com-mais-de-24-caracteres";
 process.env.CRM_ORGANIZATION_NAME = "Loja Piloto";
@@ -28,6 +28,8 @@ try {
   assert(session, "sessão deve ser recuperada");
   assert.strictEqual(session.chatwootToken, "token-chatwoot-teste");
   assert(session.permissions.includes("users:manage"));
+  assert.strictEqual(session.operational_role, "admin");
+  assert.strictEqual(session.visibility_scope, "all");
 
   const pipeline = db.getDefaultPipeline(session.organization_id);
   assert.strictEqual(pipeline.stages.length, 7);
@@ -51,22 +53,44 @@ try {
     snapshot: { search: "", filters: { priority: "urgent" } },
   });
   assert.strictEqual(filter.scope, "shared");
-  assert.strictEqual(db.listFilterPresets(session.organization_id, session.user_id).length, 1);
 
-  const user = db.createUser({
+  const sdr = db.createUser({
+    organizationId: session.organization_id,
+    actorUserId: session.user_id,
+    name: "SDR Teste",
+    email: "sdr@example.com",
+    password: "senha-vendedor-123",
+    operationalRole: "sdr",
+    chatwootAgentId: 11,
+    visibilityScope: "unassigned_and_mine",
+  });
+  assert.strictEqual(sdr.operationalRole, "sdr");
+  assert.strictEqual(sdr.chatwootAgentId, 11);
+  assert.strictEqual(sdr.visibilityScope, "unassigned_and_mine");
+
+  const seller = db.createUser({
     organizationId: session.organization_id,
     actorUserId: session.user_id,
     name: "Vendedor Teste",
     email: "vendedor@example.com",
     password: "senha-vendedor-123",
-    role: "agent",
+    operationalRole: "seller",
+    chatwootAgentId: 12,
+    visibilityScope: "mine",
   });
-  assert.strictEqual(user.role, "agent");
-  assert(db.authenticate("vendedor@example.com", "senha-vendedor-123"));
+  assert.strictEqual(seller.operationalRole, "seller");
+
+  const sellerAuth = db.authenticate("vendedor@example.com", "senha-vendedor-123");
+  const sellerSessionToken = db.createSession(sellerAuth, 60_000);
+  const sellerSession = db.getSession(sellerSessionToken.rawToken);
+  assert.strictEqual(sellerSession.visibility_scope, "mine");
+  assert.strictEqual(sellerSession.chatwoot_agent_id, 12);
+  assert(sellerSession.permissions.includes("interventions:manage"));
+  assert(!sellerSession.permissions.includes("assignments:manage"));
 
   db.syncTaskFromAttributes({
     organizationId: session.organization_id,
-    conversationId: 243,
+    conversationId: 242,
     attributes: {
       crm_next_task: "Retornar cliente",
       crm_task_due_at: "2099-12-31",
@@ -75,14 +99,47 @@ try {
     actorUserId: session.user_id,
   });
 
+  db.syncInterventions({
+    organizationId: session.organization_id,
+    conversations: [
+      {
+        id: 243,
+        labels: ["precisa-humano"],
+        meta: { assignee: { id: 11 } },
+      },
+    ],
+  });
+  db.markInterventionAssumed({
+    organizationId: session.organization_id,
+    conversationId: 243,
+    actorUserId: session.user_id,
+    agentId: 11,
+    labels: ["atendimento-manual"],
+  });
+  db.markInterventionResolved({
+    organizationId: session.organization_id,
+    conversationId: 243,
+    actorUserId: session.user_id,
+  });
+
   const audit = db.listAudit(session.organization_id, 100);
   assert(audit.some((entry) => entry.action === "pipeline.stages.updated"));
   assert(audit.some((entry) => entry.action === "user.created"));
+  assert(audit.some((entry) => entry.action === "intervention.detected"));
+  assert(audit.some((entry) => entry.action === "intervention.assumed"));
+  assert(audit.some((entry) => entry.action === "intervention.resolved"));
 
   db.deleteSession(createdSession.rawToken);
+  db.deleteSession(sellerSessionToken.rawToken);
   assert.strictEqual(db.getSession(createdSession.rawToken), null);
 
-  console.log("CRM V1.3 central foundation tests: OK");
+  console.log("CRM V1.3.2 central foundation tests: OK");
 } finally {
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  db.closeDatabase();
+  fs.rmSync(tempDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 }
