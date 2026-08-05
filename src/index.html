@@ -3,75 +3,375 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Kanban</title>
+    <meta name="color-scheme" content="light" />
+    <title>Kanban CRM</title>
     <link rel="stylesheet" href="styles.css" />
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-    />
   </head>
   <body>
-    <header>
-      <h1>Kanban</h1>
-      <div class="header-controls">
-        <div class="input-group">
+    <div id="login-screen" class="login-screen">
+      <form id="login-form" class="login-card">
+        <div class="brand-mark">K</div>
+        <p class="eyebrow">CHATWOOT CONNECTED CRM</p>
+        <h1>Entre no seu Kanban CRM</h1>
+        <p class="muted">
+          O token é mantido em uma sessão segura no servidor e não fica salvo no navegador.
+        </p>
+
+        <label>
+          Token de acesso pessoal
           <input
+            id="login-token"
             type="password"
-            id="api-token"
-            placeholder="Token de API do Chatwoot"
+            autocomplete="off"
+            placeholder="Cole o token do Chatwoot"
+            required
           />
-          <button
-            type="button"
-            class="toggle-password"
-            id="toggle-api-token"
-            title="Mostrar/Esconder Token"
-          >
-            <i class="fas fa-eye"></i>
+        </label>
+
+        <label>
+          ID da conta
+          <input
+            id="login-account"
+            type="number"
+            min="1"
+            step="1"
+            placeholder="Ex.: 1"
+            required
+          />
+        </label>
+
+        <button id="login-submit" class="button button-primary" type="submit">
+          Conectar ao Chatwoot
+        </button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+    </div>
+
+    <div id="app" class="app-shell is-hidden">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="brand-mark brand-mark-small">K</div>
+          <div>
+            <strong>Kanban CRM</strong>
+            <span>Sales workspace</span>
+          </div>
+        </div>
+
+        <nav class="main-nav" aria-label="Navegação principal">
+          <button class="nav-item is-active" data-view="dashboard">
+            <span class="nav-icon">◫</span>
+            Dashboard
           </button>
-        </div>
-        <input type="text" id="account-id" placeholder="ID da Conta" />
-        <button id="load-data" class="btn primary">Atualizar</button>
-      </div>
-    </header>
+          <button class="nav-item" data-view="pipeline">
+            <span class="nav-icon">▥</span>
+            Pipeline
+          </button>
+          <button class="nav-item" data-view="conversations">
+            <span class="nav-icon">◌</span>
+            Conversas
+          </button>
+          <button class="nav-item" data-view="tasks">
+            <span class="nav-icon">✓</span>
+            Tarefas
+          </button>
+          <button class="nav-item" data-view="contacts">
+            <span class="nav-icon">◎</span>
+            Contatos
+          </button>
+        </nav>
 
-    <main>
-      <div class="kanban-container">
-        <div class="kanban-column" id="pending">
-          <h2>Pendentes <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-        <div class="kanban-column" id="open">
-          <h2>Em Aberto <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-        <div class="kanban-column" id="snoozed">
-          <h2>Adiados <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-        <div class="kanban-column" id="resolved">
-          <h2>Resolvidos <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-      </div>
-    </main>
+        <div class="sidebar-spacer"></div>
 
-    <div id="conversation-modal" class="modal">
-      <div class="modal-content">
-        <span class="close">&times;</span>
-        <h2>Detalhes da Conversa</h2>
-        <div id="conversation-details"></div>
+        <nav class="main-nav secondary-nav">
+          <button class="nav-item" data-view="settings">
+            <span class="nav-icon">⚙</span>
+            Configurações
+          </button>
+        </nav>
+
+        <div class="sidebar-account">
+          <span class="status-dot"></span>
+          <div>
+            <strong>Chatwoot conectado</strong>
+            <span id="sidebar-account-id">Conta —</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div>
+            <p id="page-eyebrow" class="eyebrow">VISÃO GERAL</p>
+            <h1 id="page-title">Dashboard comercial</h1>
+          </div>
+
+          <div class="topbar-actions">
+            <label class="search-box">
+              <span>⌕</span>
+              <input id="global-search" type="search" placeholder="Buscar nome, telefone, mensagem..." />
+            </label>
+            <button id="refresh-button" class="icon-button" title="Atualizar dados">↻</button>
+          </div>
+        </header>
+
+        <main class="content">
+          <section id="view-dashboard" class="view is-active">
+            <div id="metrics-grid" class="metrics-grid"></div>
+
+            <div class="dashboard-grid">
+              <article class="panel panel-wide">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">PIPELINE</p>
+                    <h2>Distribuição das oportunidades</h2>
+                  </div>
+                  <button class="text-button" data-go-view="pipeline">Abrir pipeline →</button>
+                </div>
+                <div id="stage-overview" class="stage-overview"></div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">PRIORIDADE</p>
+                    <h2>Próximas tarefas</h2>
+                  </div>
+                </div>
+                <div id="dashboard-tasks" class="compact-list"></div>
+              </article>
+            </div>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">ATIVIDADE</p>
+                  <h2>Conversas recentes</h2>
+                </div>
+              </div>
+              <div id="recent-conversations" class="data-list"></div>
+            </article>
+          </section>
+
+          <section id="view-pipeline" class="view">
+            <div class="toolbar">
+              <select id="filter-assignee" aria-label="Filtrar por responsável">
+                <option value="">Todos os responsáveis</option>
+              </select>
+              <select id="filter-team" aria-label="Filtrar por time">
+                <option value="">Todos os times</option>
+              </select>
+              <select id="filter-inbox" aria-label="Filtrar por caixa de entrada">
+                <option value="">Todas as caixas</option>
+              </select>
+              <select id="filter-label" aria-label="Filtrar por etiqueta">
+                <option value="">Todas as etiquetas</option>
+              </select>
+              <button id="clear-filters" class="button button-ghost">Limpar filtros</button>
+            </div>
+            <div id="pipeline-board" class="pipeline-board"></div>
+          </section>
+
+          <section id="view-conversations" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">ATENDIMENTO</p>
+                  <h2>Todas as conversas</h2>
+                </div>
+                <span id="conversation-count" class="count-badge">0</span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Contato</th>
+                      <th>Etapa CRM</th>
+                      <th>Status Chatwoot</th>
+                      <th>Responsável</th>
+                      <th>Última atividade</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="conversations-table"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+          <section id="view-tasks" class="view">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">EXECUÇÃO</p>
+                  <h2>Agenda de tarefas</h2>
+                </div>
+                <span id="task-count" class="count-badge">0</span>
+              </div>
+              <div id="tasks-list" class="task-list"></div>
+            </article>
+          </section>
+
+          <section id="view-contacts" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">BASE</p>
+                  <h2>Contatos ativos</h2>
+                </div>
+                <span id="contact-count" class="count-badge">0</span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Contato</th>
+                      <th>Telefone</th>
+                      <th>E-mail</th>
+                      <th>Conversas</th>
+                      <th>Última atividade</th>
+                    </tr>
+                  </thead>
+                  <tbody id="contacts-table"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+          <section id="view-settings" class="view">
+            <div class="settings-grid">
+              <article class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">INTEGRAÇÃO</p>
+                    <h2>Configuração do CRM</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Inicialize os atributos comerciais no Chatwoot para armazenar etapa, valor,
+                  tarefa e motivo de perda diretamente em cada conversa.
+                </p>
+                <button id="bootstrap-crm" class="button button-primary">
+                  Inicializar atributos CRM
+                </button>
+                <div id="bootstrap-result" class="result-box"></div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">SESSÃO</p>
+                    <h2>Conta conectada</h2>
+                  </div>
+                </div>
+                <dl class="definition-list">
+                  <div><dt>Conta Chatwoot</dt><dd id="settings-account-id">—</dd></div>
+                  <div><dt>Sincronização</dt><dd>Manual / botão atualizar</dd></div>
+                  <div><dt>Token no navegador</dt><dd>Não armazenado</dd></div>
+                </dl>
+                <button id="logout-button" class="button button-danger">Sair da conta</button>
+              </article>
+            </div>
+          </section>
+        </main>
       </div>
     </div>
 
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="loading-overlay loading-hidden">
-      <div class="loading-spinner">
-        <div class="spinner"></div>
-        <p>Carregando conversas...</p>
-      </div>
+    <aside id="opportunity-drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" data-close-drawer></div>
+      <section class="drawer-panel" aria-label="Detalhes da oportunidade">
+        <header class="drawer-header">
+          <div>
+            <p id="drawer-conversation-id" class="eyebrow">CONVERSA</p>
+            <h2 id="drawer-contact-name">Contato</h2>
+            <p id="drawer-contact-meta" class="muted"></p>
+          </div>
+          <button class="icon-button" data-close-drawer aria-label="Fechar">×</button>
+        </header>
+
+        <div class="drawer-body">
+          <section class="drawer-section">
+            <div class="field-grid">
+              <label>
+                Etapa comercial
+                <select id="drawer-stage"></select>
+              </label>
+              <label>
+                Valor da oportunidade
+                <input id="drawer-value" type="number" min="0" step="0.01" placeholder="0,00" />
+              </label>
+              <label>
+                Prioridade
+                <select id="drawer-priority">
+                  <option value="none">Sem prioridade</option>
+                  <option value="low">Baixa</option>
+                  <option value="medium">Média</option>
+                  <option value="high">Alta</option>
+                  <option value="urgent">Urgente</option>
+                </select>
+              </label>
+              <label>
+                Responsável
+                <select id="drawer-assignee"></select>
+              </label>
+              <label>
+                Time
+                <select id="drawer-team"></select>
+              </label>
+              <label>
+                Próxima tarefa
+                <input id="drawer-task" type="text" placeholder="Ex.: ligar para o cliente" />
+              </label>
+              <label>
+                Prazo
+                <input id="drawer-due-date" type="date" />
+              </label>
+              <label class="checkbox-label">
+                <input id="drawer-task-done" type="checkbox" />
+                Tarefa concluída
+              </label>
+            </div>
+            <label id="loss-reason-field" class="is-hidden">
+              Motivo da perda
+              <textarea id="drawer-loss-reason" rows="2"></textarea>
+            </label>
+            <div id="drawer-labels" class="label-row"></div>
+            <div class="drawer-actions">
+              <button id="save-opportunity" class="button button-primary">Salvar alterações</button>
+              <button id="open-chatwoot" class="button button-ghost">Abrir no Chatwoot</button>
+            </div>
+          </section>
+
+          <section class="drawer-section conversation-section">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">HISTÓRICO</p>
+                <h3>Conversa</h3>
+              </div>
+              <button id="reload-messages" class="text-button">Atualizar</button>
+            </div>
+            <div id="message-thread" class="message-thread"></div>
+            <form id="reply-form" class="reply-box">
+              <textarea id="reply-content" rows="3" placeholder="Digite uma mensagem..."></textarea>
+              <div class="reply-footer">
+                <label class="checkbox-label">
+                  <input id="reply-private" type="checkbox" />
+                  Nota privada
+                </label>
+                <button id="reply-submit" class="button button-primary" type="submit">Enviar</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+    </aside>
+
+    <div id="loading-overlay" class="loading-overlay is-hidden">
+      <div class="spinner"></div>
+      <p id="loading-message">Carregando dados...</p>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
     <script src="script.js"></script>
   </body>
 </html>
