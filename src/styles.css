@@ -1814,3 +1814,177 @@ tbody tr:hover {
     flex: 1;
   }
 }
+
+/* Etiquetas do Chatwoot e legenda de tempo sem interação */
+.idle-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.idle-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.idle-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+
+.idle-dot.idle-ok { background: #22c55e; }
+.idle-dot.idle-warning { background: #f59e0b; }
+.idle-dot.idle-critical { background: #ef4444; }
+.idle-dot.idle-unknown { background: #94a3b8; }
+
+.label-chip {
+  max-width: 100%;
+  color: var(--label-fg, #ffffff);
+  background: var(--label-bg, #64748b);
+  border: 1px solid var(--label-bg, #64748b);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.label-chip-compact {
+  max-width: 145px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-label-area {
+  display: grid;
+  gap: 10px;
+  margin-top: 15px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.label-editor-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.label-editor-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.label-editor-heading small {
+  max-width: 500px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.label-empty-text {
+  font-size: 11px;
+}
+
+.label-editor {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d9c276;
+  border-radius: 12px;
+  background: #fffbeb;
+}
+
+.label-editor.is-hidden {
+  display: none;
+}
+
+.label-search-field {
+  display: grid;
+  gap: 6px;
+  margin: 0 !important;
+  color: #5f4900;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.label-options {
+  max-height: 270px;
+  display: grid;
+  gap: 6px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.label-option {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 9px !important;
+  margin: 0 !important;
+  padding: 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.label-option:hover {
+  border-color: #d6ae32;
+  background: #fffdf5;
+}
+
+.label-option input {
+  width: 16px;
+  height: 16px;
+  min-height: auto;
+  margin-top: 2px;
+}
+
+.label-option-info {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.label-option-info small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.label-editor-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.label-empty-state {
+  padding: 14px;
+}
+
+@media (max-width: 980px) {
+  .pipeline-hint {
+    align-items: flex-start;
+  }
+
+  .idle-legend {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 620px) {
+  .label-editor-heading {
+    flex-direction: column;
+  }
+
+  .label-editor-heading .button {
+    width: 100%;
+  }
+}
+

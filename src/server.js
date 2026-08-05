@@ -174,6 +174,20 @@ function pickCrmAttributes(attributes) {
   );
 }
 
+function normalizeLabelNames(input) {
+  if (!Array.isArray(input)) return [];
+  const unique = new Map();
+  for (const value of input.slice(0, 100)) {
+    const label = String(value || "").trim().slice(0, 100);
+    if (label) unique.set(label.toLocaleLowerCase("pt-BR"), label);
+  }
+  return [...unique.values()];
+}
+
+function extractLabelNames(data) {
+  return normalizeLabelNames(extractPayload(data));
+}
+
 async function syncChatwootStageDefinition(session, values) {
   const listResponse = await chatwootRequest(session, {
     method: "GET",
@@ -538,6 +552,107 @@ app.patch("/api/crm/users/:id", requireSession, requirePermission("users:manage"
 app.get("/api/crm/audit", requireSession, requirePermission("audit:read"), (req, res) => {
   return res.json({ audit: db.listAudit(req.crmSession.organization_id, req.query.limit) });
 });
+
+app.post(
+  "/api/crm/opportunities/:conversationId/labels",
+  requireSession,
+  requirePermission("opportunities:write"),
+  async (req, res) => {
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      return res.status(400).json({ error: "Conversa inválida" });
+    }
+
+    const requestedAdd = normalizeLabelNames(req.body?.add);
+    const requestedRemove = normalizeLabelNames(req.body?.remove);
+    if (requestedAdd.length + requestedRemove.length > 100) {
+      return res.status(400).json({ error: "Quantidade de etiquetas inválida" });
+    }
+
+    try {
+      const [availableResponse, currentResponse] = await Promise.all([
+        chatwootRequest(req.crmSession, {
+          method: "GET",
+          url: `${req.crmSession.chatwoot_base_url}/api/v1/accounts/${req.crmSession.chatwoot_account_id}/labels`,
+        }),
+        chatwootRequest(req.crmSession, {
+          method: "GET",
+          url: `${req.crmSession.chatwoot_base_url}/api/v1/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}/labels`,
+        }),
+      ]);
+
+      if (availableResponse.status < 200 || availableResponse.status >= 300) {
+        return relayAxiosResponse(res, availableResponse);
+      }
+      if (currentResponse.status < 200 || currentResponse.status >= 300) {
+        return relayAxiosResponse(res, currentResponse);
+      }
+
+      const availablePayload = extractPayload(availableResponse.data);
+      const availableDefinitions = Array.isArray(availablePayload) ? availablePayload : [];
+      const availableByKey = new Map(
+        availableDefinitions
+          .map((definition) => String(definition?.title || definition?.name || "").trim())
+          .filter(Boolean)
+          .map((title) => [title.toLocaleLowerCase("pt-BR"), title])
+      );
+      const invalidAdditions = requestedAdd.filter(
+        (label) => !availableByKey.has(label.toLocaleLowerCase("pt-BR"))
+      );
+      if (invalidAdditions.length) {
+        return res.status(400).json({
+          error: `Etiqueta não cadastrada no Chatwoot: ${invalidAdditions.join(", ")}`,
+        });
+      }
+
+      const before = extractLabelNames(currentResponse.data);
+      const removeKeys = new Set(
+        requestedRemove.map((label) => label.toLocaleLowerCase("pt-BR"))
+      );
+      const next = before.filter(
+        (label) => !removeKeys.has(label.toLocaleLowerCase("pt-BR"))
+      );
+      const nextKeys = new Set(next.map((label) => label.toLocaleLowerCase("pt-BR")));
+      for (const label of requestedAdd) {
+        const canonical = availableByKey.get(label.toLocaleLowerCase("pt-BR"));
+        const key = canonical.toLocaleLowerCase("pt-BR");
+        if (!nextKeys.has(key)) {
+          next.push(canonical);
+          nextKeys.add(key);
+        }
+      }
+
+      const updateResponse = await chatwootRequest(req.crmSession, {
+        method: "POST",
+        url: `${req.crmSession.chatwoot_base_url}/api/v1/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}/labels`,
+        data: { labels: next },
+      });
+      if (updateResponse.status < 200 || updateResponse.status >= 300) {
+        return relayAxiosResponse(res, updateResponse);
+      }
+
+      const after = extractLabelNames(updateResponse.data);
+      db.logAudit({
+        organizationId: req.crmSession.organization_id,
+        actorUserId: req.crmSession.user_id,
+        action: "conversation.labels.updated",
+        entityType: "conversation",
+        entityId: conversationId,
+        before: { labels: before },
+        after: { labels: after.length ? after : next },
+        metadata: {
+          added: requestedAdd,
+          removed: requestedRemove,
+        },
+      });
+
+      return res.json({ labels: after.length ? after : next });
+    } catch (error) {
+      console.error("Erro ao atualizar etiquetas da conversa:", error.message);
+      return res.status(502).json({ error: "Falha ao atualizar as etiquetas no Chatwoot" });
+    }
+  }
+);
 
 app.post(
   "/api/crm/opportunities/:conversationId/custom-attributes",

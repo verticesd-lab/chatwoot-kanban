@@ -214,6 +214,12 @@
             </div>
             <div class="pipeline-hint">
               <span>Arraste os cartões entre as etapas.</span>
+              <div class="idle-legend" aria-label="Legenda do tempo sem interação">
+                <span><i class="idle-dot idle-ok"></i>Recente: menos de 4h</span>
+                <span><i class="idle-dot idle-warning"></i>Atenção: 4h a 24h</span>
+                <span><i class="idle-dot idle-critical"></i>Crítico: mais de 24h</span>
+                <span><i class="idle-dot idle-unknown"></i>Sem data</span>
+              </div>
               <span id="pipeline-result-count">0 oportunidades exibidas</span>
             </div>
             <div id="pipeline-board" class="pipeline-board"></div>
@@ -454,7 +460,27 @@
               Motivo da perda
               <textarea id="drawer-loss-reason" rows="2"></textarea>
             </label>
-            <div id="drawer-labels" class="label-row"></div>
+            <div class="drawer-label-area">
+              <div class="label-editor-heading">
+                <div>
+                  <span class="field-caption">Etiquetas do Chatwoot</span>
+                  <small>As automações continuam aplicando etiquetas normalmente. Aqui você pode complementar ou remover manualmente.</small>
+                </div>
+                <button id="toggle-label-editor" type="button" class="button button-ghost button-small">Editar etiquetas</button>
+              </div>
+              <div id="drawer-labels" class="label-row"></div>
+              <div id="drawer-label-editor" class="label-editor is-hidden">
+                <label class="label-search-field">
+                  Buscar etiqueta
+                  <input id="drawer-label-search" type="search" placeholder="Digite o nome da etiqueta" autocomplete="off" />
+                </label>
+                <div id="drawer-label-options" class="label-options" role="group" aria-label="Etiquetas disponíveis"></div>
+                <div class="label-editor-actions">
+                  <button id="save-labels" type="button" class="button button-primary button-small">Salvar etiquetas</button>
+                  <button id="cancel-labels" type="button" class="button button-ghost button-small">Cancelar</button>
+                </div>
+              </div>
+            </div>
             <div class="drawer-actions">
               <button id="save-opportunity" class="button button-primary">Salvar alterações</button>
               <button id="open-chatwoot" class="button button-ghost">Abrir no Chatwoot</button>

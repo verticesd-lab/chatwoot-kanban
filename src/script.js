@@ -50,6 +50,7 @@ const state = {
   refreshTimer: null,
   syncStatusTimer: null,
   isLoadingWorkspace: false,
+  labelDraft: new Set(),
 };
 
 const elements = {};
@@ -175,9 +176,59 @@ function getInbox(conversation) {
   );
 }
 
+function getLabelTitle(label) {
+  return String(label?.title || label?.name || label || "").trim();
+}
+
 function getLabels(conversation) {
   const labels = conversation?.labels || conversation?.label_list || [];
-  return Array.isArray(labels) ? labels : [];
+  if (!Array.isArray(labels)) return [];
+  return [...new Set(labels.map(getLabelTitle).filter(Boolean))];
+}
+
+function normalizeLabelColor(value) {
+  const color = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toUpperCase();
+  if (/^#[0-9a-f]{3}$/i.test(color)) {
+    return `#${color.slice(1).split("").map((character) => `${character}${character}`).join("")}`.toUpperCase();
+  }
+  return "#64748B";
+}
+
+function getLabelDefinition(labelName) {
+  const key = safeLower(labelName);
+  const definition = state.labels.find((label) => safeLower(getLabelTitle(label)) === key);
+  return definition && typeof definition === "object"
+    ? definition
+    : { title: labelName, description: "", color: "#64748B" };
+}
+
+function labelTextColor(backgroundColor) {
+  const color = normalizeLabelColor(backgroundColor).slice(1);
+  const channels = [0, 2, 4].map((offset) => {
+    const value = Number.parseInt(color.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  const contrastWithBlack = (luminance + 0.05) / 0.05;
+  const contrastWithWhite = 1.05 / (luminance + 0.05);
+  return contrastWithBlack >= contrastWithWhite ? "#111827" : "#FFFFFF";
+}
+
+function createLabelChip(labelName, options = {}) {
+  const definition = getLabelDefinition(labelName);
+  const title = getLabelTitle(definition) || String(labelName);
+  const color = normalizeLabelColor(definition.color);
+  const chip = createElement(
+    "span",
+    `label-chip${options.compact ? " label-chip-compact" : ""}`,
+    title
+  );
+  chip.style.setProperty("--label-bg", color);
+  chip.style.setProperty("--label-fg", labelTextColor(color));
+  chip.style.borderColor = color;
+  chip.title = definition.description ? `${title} — ${definition.description}` : title;
+  return chip;
 }
 
 function getCustomAttributes(conversation) {
@@ -453,6 +504,7 @@ function renderIdentity() {
   elements.bootstrapCrm.disabled = !hasPermission("pipeline:manage");
   elements.managePipeline.disabled = !hasPermission("pipeline:manage");
   elements.saveOpportunity.disabled = !hasPermission("opportunities:write");
+  if (elements.saveLabels) elements.saveLabels.disabled = !hasPermission("opportunities:write");
   elements.replySubmit.disabled = !hasPermission("messages:send");
 }
 
@@ -911,7 +963,7 @@ function createOpportunityCard(conversation) {
     badges.appendChild(createElement("span", "badge unread", `${conversation.unread_count} não lida(s)`));
   }
   for (const label of labels.slice(0, 3)) {
-    badges.appendChild(createElement("span", "badge", label));
+    badges.appendChild(createLabelChip(label, { compact: true }));
   }
   if (labels.length > 3) {
     badges.appendChild(createElement("span", "badge badge-more", `+${labels.length - 3}`));
@@ -1321,10 +1373,12 @@ function populateFilterOptions() {
   fillSelect(elements.filterTeam, state.teams, "Todos os times");
   fillSelect(elements.filterInbox, state.inboxes, "Todas as caixas");
 
-  const labelOptions = state.labels.map((label) => ({
-    id: label.title || label.name || label,
-    name: label.title || label.name || label,
-  }));
+  const labelOptions = state.labels
+    .map((label) => ({
+      id: getLabelTitle(label),
+      name: getLabelTitle(label),
+    }))
+    .filter((label) => label.id);
   fillSelect(elements.filterLabel, labelOptions, "Todas as etiquetas");
 }
 
@@ -1358,6 +1412,154 @@ function fillSelect(select, items, placeholder) {
 
   if ([...select.options].some((option) => option.value === currentValue)) {
     select.value = currentValue;
+  }
+}
+
+function drawerConversation() {
+  return state.conversations.find(
+    (conversation) => Number(conversation.id) === Number(state.currentConversationId)
+  );
+}
+
+function allDrawerLabelDefinitions(conversation) {
+  const definitions = new Map();
+  for (const definition of state.labels) {
+    const title = getLabelTitle(definition);
+    if (title) definitions.set(safeLower(title), definition);
+  }
+  for (const title of getLabels(conversation)) {
+    const key = safeLower(title);
+    if (!definitions.has(key)) {
+      definitions.set(key, { title, description: "Etiqueta presente na conversa", color: "#64748B" });
+    }
+  }
+  return [...definitions.values()].sort((a, b) =>
+    getLabelTitle(a).localeCompare(getLabelTitle(b), "pt-BR", { sensitivity: "base" })
+  );
+}
+
+function renderDrawerLabelOptions() {
+  const conversation = drawerConversation();
+  if (!conversation || !elements.drawerLabelOptions) return;
+  const query = safeLower(elements.drawerLabelSearch?.value || "");
+  const canWrite = hasPermission("opportunities:write");
+  const definitions = allDrawerLabelDefinitions(conversation).filter((definition) => {
+    const searchable = `${getLabelTitle(definition)} ${definition.description || ""}`;
+    return !query || safeLower(searchable).includes(query);
+  });
+
+  elements.drawerLabelOptions.replaceChildren();
+  if (!definitions.length) {
+    elements.drawerLabelOptions.appendChild(
+      createElement("div", "empty-state label-empty-state", "Nenhuma etiqueta encontrada.")
+    );
+    return;
+  }
+
+  for (const definition of definitions) {
+    const title = getLabelTitle(definition);
+    const row = createElement("label", "label-option");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.labelDraft.has(title);
+    checkbox.disabled = !canWrite;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.labelDraft.add(title);
+      else state.labelDraft.delete(title);
+    });
+    const info = createElement("span", "label-option-info");
+    info.appendChild(createLabelChip(title));
+    if (definition.description) {
+      info.appendChild(createElement("small", null, definition.description));
+    }
+    row.append(checkbox, info);
+    elements.drawerLabelOptions.appendChild(row);
+  }
+}
+
+function renderDrawerLabels(conversation = drawerConversation()) {
+  if (!conversation) return;
+  const labels = getLabels(conversation);
+  elements.drawerLabels.replaceChildren();
+  if (!labels.length) {
+    elements.drawerLabels.appendChild(
+      createElement("span", "muted label-empty-text", "Nenhuma etiqueta atribuída.")
+    );
+  } else {
+    for (const label of labels) elements.drawerLabels.appendChild(createLabelChip(label));
+  }
+  renderDrawerLabelOptions();
+}
+
+function toggleDrawerLabelEditor(forceOpen) {
+  const shouldOpen = typeof forceOpen === "boolean"
+    ? forceOpen
+    : elements.drawerLabelEditor.classList.contains("is-hidden");
+  elements.drawerLabelEditor.classList.toggle("is-hidden", !shouldOpen);
+  elements.toggleLabelEditor.textContent = shouldOpen
+    ? "Fechar editor"
+    : hasPermission("opportunities:write")
+      ? "Editar etiquetas"
+      : "Visualizar etiquetas";
+  if (shouldOpen) {
+    renderDrawerLabelOptions();
+    elements.drawerLabelSearch.focus();
+  }
+}
+
+function cancelDrawerLabelChanges() {
+  const conversation = drawerConversation();
+  if (!conversation) return;
+  state.labelDraft = new Set(getLabels(conversation));
+  elements.drawerLabelSearch.value = "";
+  renderDrawerLabelOptions();
+  toggleDrawerLabelEditor(false);
+}
+
+async function saveDrawerLabels() {
+  if (!hasPermission("opportunities:write")) {
+    showToast("Seu perfil possui acesso somente para leitura.", "error");
+    return;
+  }
+  const conversation = drawerConversation();
+  if (!conversation) return;
+
+  const currentLabels = getLabels(conversation);
+  const selectedLabels = [...state.labelDraft];
+  const currentKeys = new Map(currentLabels.map((label) => [safeLower(label), label]));
+  const selectedKeys = new Map(selectedLabels.map((label) => [safeLower(label), label]));
+  const add = [...selectedKeys.entries()]
+    .filter(([key]) => !currentKeys.has(key))
+    .map(([, label]) => label);
+  const remove = [...currentKeys.entries()]
+    .filter(([key]) => !selectedKeys.has(key))
+    .map(([, label]) => label);
+
+  if (!add.length && !remove.length) {
+    showToast("Nenhuma alteração nas etiquetas.", "success");
+    toggleDrawerLabelEditor(false);
+    return;
+  }
+
+  elements.saveLabels.disabled = true;
+  try {
+    const result = await apiRequest(`/api/crm/opportunities/${conversation.id}/labels`, {
+      method: "POST",
+      body: JSON.stringify({ add, remove }),
+    });
+    const labels = Array.isArray(result?.labels) ? result.labels : selectedLabels;
+    conversation.labels = labels;
+    conversation.label_list = labels;
+    state.labelDraft = new Set(labels);
+    elements.drawerLabelSearch.value = "";
+    renderDrawerLabels(conversation);
+    renderAll();
+    toggleDrawerLabelEditor(false);
+    showToast("Etiquetas atualizadas no Chatwoot.", "success");
+  } catch (error) {
+    showToast(`Não foi possível atualizar as etiquetas: ${error.message}`, "error");
+  } finally {
+    elements.saveLabels.disabled = !hasPermission("opportunities:write");
   }
 }
 
@@ -1407,10 +1609,12 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   toggleLossReason();
   updateDrawerTaskState();
 
-  elements.drawerLabels.replaceChildren();
-  for (const label of getLabels(conversation)) {
-    elements.drawerLabels.appendChild(createElement("span", "label-chip", label));
-  }
+  state.labelDraft = new Set(getLabels(conversation));
+  elements.drawerLabelSearch.value = "";
+  elements.drawerLabelEditor.classList.add("is-hidden");
+  elements.toggleLabelEditor.textContent = canWrite ? "Editar etiquetas" : "Visualizar etiquetas";
+  elements.saveLabels.disabled = !canWrite;
+  renderDrawerLabels(conversation);
 
   elements.drawer.classList.add("is-open");
   elements.drawer.setAttribute("aria-hidden", "false");
@@ -2151,6 +2355,7 @@ function auditActionLabel(action) {
     "user.created": "Criou um usuário",
     "user.updated": "Atualizou um usuário",
     "opportunity.updated": "Atualizou uma oportunidade",
+    "conversation.labels.updated": "Atualizou etiquetas da conversa",
     "chatwoot.message.created": "Enviou mensagem ou nota",
     "chatwoot.post": "Executou alteração no Chatwoot",
     "chatwoot.patch": "Atualizou dados no Chatwoot",
@@ -2331,6 +2536,12 @@ function cacheElements() {
     lossReasonField: byId("loss-reason-field"),
     drawerLossReason: byId("drawer-loss-reason"),
     drawerLabels: byId("drawer-labels"),
+    drawerLabelEditor: byId("drawer-label-editor"),
+    drawerLabelSearch: byId("drawer-label-search"),
+    drawerLabelOptions: byId("drawer-label-options"),
+    toggleLabelEditor: byId("toggle-label-editor"),
+    saveLabels: byId("save-labels"),
+    cancelLabels: byId("cancel-labels"),
     saveOpportunity: byId("save-opportunity"),
     openChatwoot: byId("open-chatwoot"),
     reloadMessages: byId("reload-messages"),
@@ -2375,6 +2586,10 @@ function bindEvents() {
   elements.drawerTask.addEventListener("input", updateDrawerTaskState);
   elements.drawerDueDate.addEventListener("change", updateDrawerTaskState);
   elements.drawerTaskDone.addEventListener("change", updateDrawerTaskState);
+  elements.toggleLabelEditor.addEventListener("click", () => toggleDrawerLabelEditor());
+  elements.drawerLabelSearch.addEventListener("input", renderDrawerLabelOptions);
+  elements.saveLabels.addEventListener("click", saveDrawerLabels);
+  elements.cancelLabels.addEventListener("click", cancelDrawerLabelChanges);
   elements.saveOpportunity.addEventListener("click", saveOpportunity);
   elements.openChatwoot.addEventListener("click", openInChatwoot);
   elements.reloadMessages.addEventListener("click", loadMessages);
