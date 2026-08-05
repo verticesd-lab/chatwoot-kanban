@@ -55,6 +55,8 @@ const state = {
   interventionFilter: "all",
   interventionCount: 0,
   organizationConversationCount: 0,
+  currentMessages: [],
+  showSystemEvents: false,
 };
 
 const elements = {};
@@ -1856,6 +1858,8 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   if (!conversation) return;
 
   state.currentConversationId = Number(conversationId);
+  state.showSystemEvents = false;
+  state.currentMessages = [];
   const sender = getSender(conversation);
   const attributes = getCustomAttributes(conversation);
   const assignee = getAssignee(conversation);
@@ -1937,6 +1941,8 @@ function closeOpportunityDrawer() {
   elements.drawer.setAttribute("aria-hidden", "true");
   document.body.style.overflow = "";
   state.currentConversationId = null;
+  state.currentMessages = [];
+  state.showSystemEvents = false;
 }
 
 function toggleLossReason() {
@@ -1965,6 +1971,138 @@ function updateDrawerTaskState() {
           : "";
 }
 
+
+function messageContent(message) {
+  return String(
+    message?.content ||
+      message?.processed_message_content ||
+      attachmentDescription(message) ||
+      ""
+  ).trim();
+}
+
+function isSystemActivityMessage(message) {
+  const numericType = Number(message?.message_type);
+  const rawType = safeLower(message?.message_type);
+  const contentType = safeLower(message?.content_type);
+  const senderType = safeLower(message?.sender_type || message?.sender?.type);
+  const attributes = message?.content_attributes || {};
+
+  if (numericType === 2 || rawType === "activity" || contentType === "activity") return true;
+  if (attributes.event || attributes.event_type || attributes.activity_type) return true;
+  if (senderType === "system" || senderType === "activity") return true;
+
+  const content = messageContent(message);
+  if (!content) return false;
+
+  return (
+    /^(?:conversa\s+)?(?:foi\s+)?(?:marcada\s+como\s+resolvida|reaberta|atribu[ií]d[oa]\s+a)\b/i.test(content) ||
+    /\b(?:adicionou|removeu)\s+[a-z0-9][a-z0-9_-]{2,}\s*$/i.test(content) ||
+    /\b(?:atribuiu|transferiu)\s+(?:a|para)\b/i.test(content)
+  );
+}
+
+function classifySystemActivity(content) {
+  const text = String(content || "").trim();
+
+  let match = text.match(/^(.*?)\s+(adicionou|removeu)\s+([a-z0-9][a-z0-9_-]{2,})\s*$/i);
+  if (match) {
+    return {
+      type: "label",
+      icon: "🏷",
+      actor: match[1].trim(),
+      action: safeLower(match[2]) === "adicionou" ? "Etiqueta adicionada" : "Etiqueta removida",
+      label: match[3].trim(),
+    };
+  }
+
+  match = text.match(/^Atribu[ií]d[oa]\s+a\s+(.+?)(?:\s+por\s+(.+))?$/i);
+  if (match) {
+    return {
+      type: "assignment",
+      icon: "👤",
+      action: "Responsável atualizado",
+      target: match[1].trim(),
+      actor: match[2]?.trim() || "",
+    };
+  }
+
+  match = text.match(/^(?:Conversa\s+)?foi\s+marcada\s+como\s+resolvida(?:\s+por\s+(.+))?$/i);
+  if (match) {
+    return {
+      type: "resolved",
+      icon: "✓",
+      action: "Conversa resolvida",
+      actor: match[1]?.trim() || "",
+    };
+  }
+
+  match = text.match(/^(?:Conversa\s+)?foi\s+reaberta(?:\s+por\s+(.+))?$/i);
+  if (match) {
+    return {
+      type: "reopened",
+      icon: "↻",
+      action: "Conversa reaberta",
+      actor: match[1]?.trim() || "",
+    };
+  }
+
+  return {
+    type: "generic",
+    icon: "⚙",
+    action: "Atividade do sistema",
+    detail: text,
+    actor: "",
+  };
+}
+
+function renderSystemActivity(message) {
+  const content = messageContent(message);
+  const activity = classifySystemActivity(content);
+  const row = createElement("div", `system-event system-event-${activity.type}`);
+  const icon = createElement("span", "system-event-icon", activity.icon);
+  const body = createElement("div", "system-event-body");
+  const heading = createElement("div", "system-event-heading");
+  heading.appendChild(createElement("strong", null, activity.action));
+
+  const detail = createElement("div", "system-event-detail");
+  if (activity.type === "label" && activity.label) {
+    detail.appendChild(createLabelChip(activity.label, { compact: true }));
+    if (activity.actor) detail.appendChild(createElement("span", null, `por ${activity.actor}`));
+  } else if (activity.type === "assignment" && activity.target) {
+    detail.appendChild(createElement("strong", null, activity.target));
+    if (activity.actor) detail.appendChild(createElement("span", null, `por ${activity.actor}`));
+  } else if (activity.actor) {
+    detail.appendChild(createElement("span", null, `por ${activity.actor}`));
+  } else if (activity.detail) {
+    detail.appendChild(createElement("span", null, activity.detail));
+  }
+
+  body.append(heading, detail);
+  const time = createElement(
+    "time",
+    "system-event-time",
+    formatDate(message.created_at)
+  );
+  row.append(icon, body, time);
+  return row;
+}
+
+function updateSystemEventsToggle(messages) {
+  if (!elements.toggleSystemEvents) return;
+  const count = messages.filter(isSystemActivityMessage).length;
+  elements.toggleSystemEvents.classList.toggle("is-hidden", count === 0);
+  elements.toggleSystemEvents.textContent = state.showSystemEvents
+    ? `Ocultar atividades (${count})`
+    : `Mostrar atividades (${count})`;
+  elements.toggleSystemEvents.setAttribute("aria-pressed", String(state.showSystemEvents));
+}
+
+function toggleSystemEvents() {
+  state.showSystemEvents = !state.showSystemEvents;
+  renderMessages(state.currentMessages);
+}
+
 async function loadMessages() {
   const conversationId = state.currentConversationId;
   if (!conversationId) return;
@@ -1984,15 +2122,28 @@ async function loadMessages() {
 }
 
 function renderMessages(messages) {
+  const normalizedMessages = Array.isArray(messages) ? messages : [];
+  state.currentMessages = normalizedMessages;
+  updateSystemEventsToggle(normalizedMessages);
   elements.messageThread.replaceChildren();
-  if (!Array.isArray(messages) || !messages.length) {
+
+  if (!normalizedMessages.length) {
     elements.messageThread.appendChild(createElement("div", "empty-state", "Nenhuma mensagem disponível."));
     return;
   }
 
-  for (const message of messages) {
-    const content = message.content || message.processed_message_content || attachmentDescription(message);
+  let renderedCount = 0;
+  for (const message of normalizedMessages) {
+    const content = messageContent(message);
     if (!content) continue;
+
+    if (isSystemActivityMessage(message)) {
+      if (!state.showSystemEvents) continue;
+      elements.messageThread.appendChild(renderSystemActivity(message));
+      renderedCount += 1;
+      continue;
+    }
+
     const isPrivate = Boolean(message.private);
     const outgoing = Number(message.message_type) === 1 || message.message_type === "outgoing";
     const bubble = createElement(
@@ -2008,6 +2159,19 @@ function renderMessages(messages) {
       )
     );
     elements.messageThread.appendChild(bubble);
+    renderedCount += 1;
+  }
+
+  if (!renderedCount) {
+    elements.messageThread.appendChild(
+      createElement(
+        "div",
+        "empty-state",
+        state.showSystemEvents
+          ? "Nenhum item disponível neste histórico."
+          : "Nenhuma mensagem do cliente ou da equipe. Use “Mostrar atividades” para ver eventos do sistema."
+      )
+    );
   }
 
   elements.messageThread.scrollTop = elements.messageThread.scrollHeight;
@@ -2958,6 +3122,7 @@ function cacheElements() {
     saveOpportunity: byId("save-opportunity"),
     openChatwoot: byId("open-chatwoot"),
     reloadMessages: byId("reload-messages"),
+    toggleSystemEvents: byId("toggle-system-events"),
     messageThread: byId("message-thread"),
     replyForm: byId("reply-form"),
     replyContent: byId("reply-content"),
@@ -3015,6 +3180,7 @@ function bindEvents() {
   });
   elements.openChatwoot.addEventListener("click", openInChatwoot);
   elements.reloadMessages.addEventListener("click", loadMessages);
+  elements.toggleSystemEvents?.addEventListener("click", toggleSystemEvents);
   elements.replyForm.addEventListener("submit", sendReply);
 
   document.querySelectorAll("[data-close-drawer]").forEach((element) => {

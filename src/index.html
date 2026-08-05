@@ -551,8 +551,21 @@
                 <p class="eyebrow">HISTÓRICO</p>
                 <h3>Conversa</h3>
               </div>
-              <button id="reload-messages" class="text-button">Atualizar</button>
+              <div class="history-actions">
+                <button
+                  id="toggle-system-events"
+                  class="text-button history-toggle is-hidden"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  Mostrar atividades
+                </button>
+                <button id="reload-messages" class="text-button" type="button">Atualizar</button>
+              </div>
             </div>
+            <p class="history-helper">
+              Mensagens ficam em destaque. Etiquetas, atribuições e mudanças de status ficam separadas em “Atividades”.
+            </p>
             <div id="message-thread" class="message-thread"></div>
             <form id="reply-form" class="reply-box">
               <textarea id="reply-content" rows="3" placeholder="Digite uma mensagem..."></textarea>

@@ -2261,3 +2261,214 @@ tbody tr:hover {
   background: #fee2e2;
   color: #7f1d1d;
 }
+
+
+/* CRM V1.3.2 — histórico legível e etiquetas sem corte */
+.history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.history-toggle[aria-pressed="true"] {
+  color: #7c5a05;
+  background: #fff4cf;
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+
+.history-helper {
+  margin: -2px 0 8px;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.system-event {
+  width: min(100%, 620px);
+  justify-self: center;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #94a3b8;
+  border-radius: 9px;
+  color: #475569;
+  background: #f8fafc;
+  font-size: 10px;
+}
+
+.system-event-label {
+  border-left-color: #c28b11;
+  background: #fffaf0;
+}
+
+.system-event-assignment {
+  border-left-color: #2563eb;
+  background: #f5f9ff;
+}
+
+.system-event-resolved {
+  border-left-color: #16a34a;
+  background: #f3fbf5;
+}
+
+.system-event-reopened {
+  border-left-color: #7c3aed;
+  background: #faf7ff;
+}
+
+.system-event-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.15);
+  font-size: 12px;
+}
+
+.system-event-body {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.system-event-heading strong {
+  color: #334155;
+  font-size: 10px;
+}
+
+.system-event-detail {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.system-event-detail > span,
+.system-event-detail > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.system-event-time {
+  color: #94a3b8;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.card-badges {
+  width: 100%;
+  align-items: flex-start;
+  overflow: visible;
+}
+
+.card-badges .label-chip-compact {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.15;
+}
+
+.card-badges .badge-more {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .system-event {
+    grid-template-columns: 26px minmax(0, 1fr);
+  }
+
+  .system-event-time {
+    grid-column: 2;
+  }
+
+  .history-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* =========================================================
+ * V1.3.2 — correção definitiva de etiquetas nos cards
+ * Garante que nenhum chip force o card para fora da coluna.
+ * ========================================================= */
+.pipeline-list {
+  min-width: 0;
+}
+
+.opportunity-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.opportunity-card > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.card-badges {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.card-badges .label-chip-compact,
+.card-badges > .badge:not(.badge-more) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  display: block;
+  padding: 4px 7px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.card-badges .badge-more {
+  width: auto;
+  max-width: 100%;
+  justify-self: start;
+  align-self: start;
+}
+
+@media (max-width: 420px) {
+  .card-badges {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* =========================================================
+ * V1.3.2 — correção V3: preserva a altura natural dos cards
+ * O overflow:hidden permitia que as linhas do CSS Grid
+ * encolhessem quando a coluna possuía muitos leads.
+ * ========================================================= */
+.pipeline-list {
+  grid-auto-rows: max-content;
+}
+
+.opportunity-card {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  align-self: start;
+  overflow: visible;
+}
