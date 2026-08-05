@@ -107,7 +107,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.1.1",
+    version: "1.2.0",
   });
 });
 
@@ -292,6 +292,51 @@ app.post("/api/crm/bootstrap", requireSession, async (req, res) => {
   } catch (error) {
     console.error("Erro ao inicializar atributos CRM:", error.message);
     return res.status(502).json({ error: "Falha ao configurar os atributos do CRM" });
+  }
+});
+
+
+app.post("/api/crm/stages/sync", requireSession, async (req, res) => {
+  const session = req.crmSession;
+  const values = Array.isArray(req.body?.values)
+    ? [...new Set(req.body.values.map((value) => String(value || "").trim()).filter(Boolean))]
+    : [];
+
+  if (!values.length || values.length > 50) {
+    return res.status(400).json({ error: "Informe entre 1 e 50 etapas válidas" });
+  }
+
+  try {
+    const listResponse = await chatwootRequest(session, {
+      method: "GET",
+      url: `${CHATWOOT_BASE_URL}/api/v1/accounts/${session.accountId}/custom_attribute_definitions?attribute_model=0`,
+    });
+    if (listResponse.status < 200 || listResponse.status >= 300) {
+      return relayAxiosResponse(res, listResponse);
+    }
+    const definitions = Array.isArray(listResponse.data)
+      ? listResponse.data
+      : listResponse.data?.payload || [];
+    const stageDefinition = definitions.find((item) => item.attribute_key === "crm_stage");
+    if (!stageDefinition?.id) {
+      return res.status(404).json({ error: "Atributo crm_stage não encontrado. Inicialize os atributos CRM." });
+    }
+    const updateResponse = await chatwootRequest(session, {
+      method: "PATCH",
+      url: `${CHATWOOT_BASE_URL}/api/v1/accounts/${session.accountId}/custom_attribute_definitions/${stageDefinition.id}`,
+      data: {
+        attribute_display_name: stageDefinition.attribute_display_name || "Etapa do CRM",
+        attribute_display_type: stageDefinition.attribute_display_type ?? 6,
+        attribute_description: stageDefinition.attribute_description || "Etapa comercial independente do status da conversa",
+        attribute_key: "crm_stage",
+        attribute_values: values,
+        attribute_model: stageDefinition.attribute_model ?? 0,
+      },
+    });
+    return relayAxiosResponse(res, updateResponse);
+  } catch (error) {
+    console.error("Erro ao sincronizar etapas CRM:", error.message);
+    return res.status(502).json({ error: "Falha ao sincronizar etapas do CRM" });
   }
 });
 

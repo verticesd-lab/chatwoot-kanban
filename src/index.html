@@ -192,6 +192,13 @@
                 <option value="overdue">Tarefa vencida</option>
                 <option value="done">Tarefa concluída</option>
               </select>
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <select id="filter-preset" aria-label="Aplicar filtro salvo">
+                <option value="">Filtros salvos</option>
+              </select>
+              <button id="save-filter-preset" class="button button-ghost">Salvar filtro</button>
+              <button id="delete-filter-preset" class="button button-ghost" disabled>Excluir salvo</button>
+              <button id="manage-pipeline" class="button button-primary">Configurar etapas</button>
               <button id="clear-filters" class="button button-ghost">Limpar filtros</button>
             </div>
             <div class="pipeline-hint">
@@ -293,6 +300,24 @@
                 <div id="bootstrap-result" class="result-box"></div>
               </article>
 
+              <article class="panel pipeline-settings-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">PIPELINE</p>
+                    <h2>Etapas comerciais</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Edite nomes e cores, altere a ordem ou crie novas etapas. Etapas com oportunidades não podem ser arquivadas ou excluídas.
+                </p>
+                <div id="stage-manager-list" class="stage-manager-list"></div>
+                <form id="stage-manager-form" class="stage-manager-form">
+                  <input id="new-stage-name" type="text" maxlength="60" placeholder="Nome da nova etapa" required />
+                  <input id="new-stage-color" type="color" value="#6366f1" aria-label="Cor da nova etapa" />
+                  <button class="button button-primary" type="submit">Adicionar etapa</button>
+                </form>
+              </article>
+
               <article class="panel">
                 <div class="panel-header">
                   <div>
@@ -302,7 +327,7 @@
                 </div>
                 <dl class="definition-list">
                   <div><dt>Conta Chatwoot</dt><dd id="settings-account-id">—</dd></div>
-                  <div><dt>Sincronização</dt><dd>Manual / botão atualizar</dd></div>
+                  <div><dt>Sincronização</dt><dd>Automática a cada 60s + manual</dd></div>
                   <div><dt>Token no navegador</dt><dd>Não armazenado</dd></div>
                 </dl>
                 <button id="logout-button" class="button button-danger">Sair da conta</button>
@@ -406,6 +431,32 @@
         </div>
       </section>
     </aside>
+
+    <div id="transition-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-transition></div>
+      <form id="transition-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">FECHAMENTO</p>
+            <h2 id="transition-modal-title">Atualizar oportunidade</h2>
+            <p id="transition-modal-description" class="muted"></p>
+          </div>
+          <button type="button" class="icon-button" data-close-transition aria-label="Fechar">×</button>
+        </div>
+        <label id="transition-value-field">
+          Valor final da venda
+          <input id="transition-value" type="number" min="0.01" step="0.01" placeholder="0,00" />
+        </label>
+        <label id="transition-reason-field" class="is-hidden">
+          Motivo da perda
+          <textarea id="transition-reason" rows="4" placeholder="Ex.: sem entrada, desistiu, comprou em outra loja"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-transition>Cancelar</button>
+          <button id="transition-confirm" type="submit" class="button button-primary">Confirmar</button>
+        </div>
+      </form>
+    </div>
 
     <div id="loading-overlay" class="loading-overlay is-hidden">
       <div class="spinner"></div>

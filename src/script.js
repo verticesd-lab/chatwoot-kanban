@@ -1,12 +1,18 @@
-const PIPELINE_STAGES = [
-  { id: "new", label: "Novo lead", color: "#2563eb" },
-  { id: "contacted", label: "Contato iniciado", color: "#0ea5e9" },
-  { id: "qualification", label: "Qualificação", color: "#8b5cf6" },
-  { id: "proposal", label: "Proposta", color: "#f59e0b" },
-  { id: "negotiation", label: "Negociação", color: "#f97316" },
-  { id: "won", label: "Ganho", color: "#10b981" },
-  { id: "lost", label: "Perdido", color: "#ef4444" },
+const DEFAULT_PIPELINE_STAGES = [
+  { id: "new", label: "Novo lead", color: "#2563eb", archived: false, locked: true },
+  { id: "contacted", label: "Contato iniciado", color: "#0ea5e9", archived: false },
+  { id: "qualification", label: "Qualificação", color: "#8b5cf6", archived: false },
+  { id: "proposal", label: "Proposta", color: "#f59e0b", archived: false },
+  { id: "negotiation", label: "Negociação", color: "#f97316", archived: false },
+  { id: "won", label: "Ganho", color: "#10b981", archived: false, locked: true, terminal: true },
+  { id: "lost", label: "Perdido", color: "#ef4444", archived: false, locked: true, terminal: true },
 ];
+
+const STORAGE_KEYS = {
+  pipelineStages: "chatwoot_crm_pipeline_stages_v12",
+  filterPresets: "chatwoot_crm_filter_presets_v12",
+  activePreset: "chatwoot_crm_active_filter_preset_v12",
+};
 
 const PAGE_SIZE = 25;
 
@@ -17,6 +23,9 @@ const state = {
   teams: [],
   inboxes: [],
   labels: [],
+  pipelineStages: [],
+  filterPresets: [],
+  activeFilterPresetId: "",
   currentView: "dashboard",
   currentConversationId: null,
   search: "",
@@ -30,6 +39,7 @@ const state = {
   },
   taskViewFilter: "all",
   draggingConversationId: null,
+  pendingTransition: null,
   lastSyncAt: null,
   refreshTimer: null,
   syncStatusTimer: null,
@@ -49,8 +59,76 @@ function createElement(tag, className, text) {
   return element;
 }
 
+function cloneDefaultStages() {
+  return DEFAULT_PIPELINE_STAGES.map((stage) => ({ ...stage }));
+}
+
+function loadJsonStorage(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn(`Configuração local inválida em ${key}:`, error);
+    return fallback;
+  }
+}
+
+function slugifyStage(value) {
+  return safeLower(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 42);
+}
+
+function normalizePipelineStages(stages) {
+  const source = Array.isArray(stages) && stages.length ? stages : cloneDefaultStages();
+  const normalized = [];
+  const ids = new Set();
+  for (const stage of source) {
+    const id = slugifyStage(stage?.id || stage?.label || "");
+    if (!id || ids.has(id)) continue;
+    ids.add(id);
+    normalized.push({
+      id,
+      label: String(stage?.label || id).trim().slice(0, 60) || id,
+      color: /^#[0-9a-f]{6}$/i.test(String(stage?.color || "")) ? stage.color : "#64748b",
+      archived: Boolean(stage?.archived),
+      locked: Boolean(stage?.locked || ["new", "won", "lost"].includes(id)),
+      terminal: Boolean(stage?.terminal || ["won", "lost"].includes(id)),
+    });
+  }
+  for (const required of DEFAULT_PIPELINE_STAGES.filter((stage) => stage.locked)) {
+    if (!ids.has(required.id)) normalized.push({ ...required });
+  }
+  return normalized;
+}
+
+function loadLocalConfiguration() {
+  state.pipelineStages = normalizePipelineStages(
+    loadJsonStorage(STORAGE_KEYS.pipelineStages, cloneDefaultStages())
+  );
+  const presets = loadJsonStorage(STORAGE_KEYS.filterPresets, []);
+  state.filterPresets = Array.isArray(presets) ? presets : [];
+  state.activeFilterPresetId = window.localStorage.getItem(STORAGE_KEYS.activePreset) || "";
+}
+
+function savePipelineStages() {
+  window.localStorage.setItem(STORAGE_KEYS.pipelineStages, JSON.stringify(state.pipelineStages));
+}
+
+function getAllPipelineStages() {
+  return state.pipelineStages.length ? state.pipelineStages : cloneDefaultStages();
+}
+
+function getVisiblePipelineStages() {
+  return getAllPipelineStages().filter((stage) => !stage.archived);
+}
+
 function getStage(stageId) {
-  return PIPELINE_STAGES.find((stage) => stage.id === stageId) || PIPELINE_STAGES[0];
+  return getAllPipelineStages().find((stage) => stage.id === stageId) || getAllPipelineStages()[0];
 }
 
 function getSender(conversation) {
@@ -88,7 +166,7 @@ function getCustomAttributes(conversation) {
 
 function getConversationStage(conversation) {
   const customStage = String(getCustomAttributes(conversation).crm_stage || "").trim();
-  if (PIPELINE_STAGES.some((stage) => stage.id === customStage)) return customStage;
+  if (getAllPipelineStages().some((stage) => stage.id === customStage)) return customStage;
 
   const labels = getLabels(conversation).map((label) => String(label).toLowerCase());
   if (labels.some((label) => ["ganho", "won", "venda-fechada"].includes(label))) return "won";
@@ -380,6 +458,9 @@ async function loadWorkspace(options = {}) {
 
     populateFilterOptions();
     populateDrawerOptions();
+    restoreActiveFilterPreset();
+    renderFilterPresets();
+    renderStageManager();
     state.lastSyncAt = Date.now();
     updateSyncStatus();
     renderAll();
@@ -525,12 +606,12 @@ function renderStageOverview(conversations) {
   elements.stageOverview.replaceChildren();
   const maximum = Math.max(
     1,
-    ...PIPELINE_STAGES.map(
+    ...getVisiblePipelineStages().map(
       (stage) => conversations.filter((conversation) => getConversationStage(conversation) === stage.id).length
     )
   );
 
-  for (const stage of PIPELINE_STAGES) {
+  for (const stage of getVisiblePipelineStages()) {
     const stageConversations = conversations.filter(
       (conversation) => getConversationStage(conversation) === stage.id
     );
@@ -616,7 +697,7 @@ function renderPipeline() {
     conversations.length === 1 ? "oportunidade exibida" : "oportunidades exibidas"
   }`;
 
-  for (const stage of PIPELINE_STAGES) {
+  for (const stage of getVisiblePipelineStages()) {
     const stageConversations = conversations.filter(
       (conversation) => getConversationStage(conversation) === stage.id
     );
@@ -632,15 +713,20 @@ function renderPipeline() {
     const dot = createElement("span", "stage-dot");
     dot.style.background = stage.color;
     title.append(dot, createElement("strong", null, stage.label));
-    header.append(
-      title,
-      createElement("span", null, `${stageConversations.length} · ${formatCurrency(stageValue)}`)
+    const headerMeta = createElement(
+      "span",
+      "pipeline-column-meta",
+      `${stageConversations.length} · ${formatCurrency(stageValue)}`
     );
+    header.append(title, headerMeta);
 
     const list = createElement("div", "pipeline-list");
     list.dataset.stage = stage.id;
     for (const conversation of stageConversations) {
       list.appendChild(createOpportunityCard(conversation));
+    }
+    if (!stageConversations.length) {
+      list.appendChild(createElement("div", "pipeline-empty", "Arraste uma oportunidade para esta etapa"));
     }
 
     column.addEventListener("dragover", (event) => {
@@ -653,7 +739,7 @@ function renderPipeline() {
       column.classList.remove("is-drag-over");
       const conversationId = Number(state.draggingConversationId);
       if (!conversationId) return;
-      await moveOpportunity(conversationId, stage.id);
+      await requestStageTransition(conversationId, stage.id);
     });
 
     column.append(header, list);
@@ -745,6 +831,35 @@ function createOpportunityCard(conversation) {
     card.append(taskHeader, task);
   }
 
+  const quickActions = createElement("div", "card-quick-actions");
+  const quickDefinitions = [
+    ["task", "✓", "Criar ou editar tarefa"],
+    ["assignee", "👤", "Alterar responsável"],
+    ["won", "★", "Marcar como ganho"],
+    ["lost", "×", "Marcar como perdido"],
+    ["chatwoot", "↗", "Abrir no Chatwoot"],
+  ];
+  for (const [action, icon, titleText] of quickDefinitions) {
+    const button = createElement("button", `card-quick-action action-${action}`, icon);
+    button.type = "button";
+    button.draggable = false;
+    button.title = titleText;
+    button.dataset.quickAction = action;
+    button.addEventListener("mousedown", (event) => event.stopPropagation());
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "task") return openOpportunityDrawer(conversation.id, { focus: "task" });
+      if (action === "assignee") return openOpportunityDrawer(conversation.id, { focus: "assignee" });
+      if (action === "won" || action === "lost") {
+        return requestStageTransition(conversation.id, action);
+      }
+      if (action === "chatwoot") return openInChatwootById(conversation.id);
+    });
+    quickActions.appendChild(button);
+  }
+  card.appendChild(quickActions);
+
   card.addEventListener("dragstart", () => {
     state.draggingConversationId = conversation.id;
     card.classList.add("is-dragging");
@@ -757,21 +872,94 @@ function createOpportunityCard(conversation) {
   return card;
 }
 
-async function moveOpportunity(conversationId, stageId) {
+async function requestStageTransition(conversationId, stageId) {
   const conversation = state.conversations.find((item) => Number(item.id) === Number(conversationId));
   if (!conversation || getConversationStage(conversation) === stageId) return;
 
-  const previousAttributes = getCustomAttributes(conversation);
-  conversation.custom_attributes = { ...previousAttributes, crm_stage: stageId };
+  if (["won", "lost"].includes(stageId)) {
+    openTransitionModal(conversationId, stageId);
+    return;
+  }
+  await moveOpportunity(conversationId, stageId, {});
+}
+
+function openTransitionModal(conversationId, stageId) {
+  const conversation = state.conversations.find((item) => Number(item.id) === Number(conversationId));
+  if (!conversation) return;
+  const sender = getSender(conversation);
+  const attributes = getCustomAttributes(conversation);
+  state.pendingTransition = { conversationId, stageId };
+  elements.transitionModalTitle.textContent = stageId === "won" ? "Marcar oportunidade como ganha" : "Marcar oportunidade como perdida";
+  elements.transitionModalDescription.textContent = `${sender.name || `Conversa #${conversation.id}`} · #${conversation.id}`;
+  elements.transitionValueField.classList.toggle("is-hidden", stageId !== "won");
+  elements.transitionReasonField.classList.toggle("is-hidden", stageId !== "lost");
+  elements.transitionValue.value = parseCurrency(attributes.crm_value) || "";
+  elements.transitionReason.value = attributes.crm_loss_reason || "";
+  elements.transitionModal.classList.add("is-open");
+  elements.transitionModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+  window.setTimeout(() => {
+    (stageId === "won" ? elements.transitionValue : elements.transitionReason).focus();
+  }, 60);
+}
+
+function closeTransitionModal() {
+  elements.transitionModal.classList.remove("is-open");
+  elements.transitionModal.setAttribute("aria-hidden", "true");
+  state.pendingTransition = null;
+  if (!elements.drawer.classList.contains("is-open")) document.body.style.overflow = "";
+}
+
+async function confirmTransition(event) {
+  event.preventDefault();
+  const transition = state.pendingTransition;
+  if (!transition) return;
+  const extras = {};
+  if (transition.stageId === "won") {
+    const value = Number(elements.transitionValue.value);
+    if (!Number.isFinite(value) || value <= 0) {
+      showToast("Informe um valor maior que zero para concluir a venda.", "error");
+      elements.transitionValue.focus();
+      return;
+    }
+    extras.crm_value = value;
+    extras.crm_loss_reason = "";
+  } else {
+    const reason = elements.transitionReason.value.trim();
+    if (!reason) {
+      showToast("Informe o motivo da perda.", "error");
+      elements.transitionReason.focus();
+      return;
+    }
+    extras.crm_loss_reason = reason;
+  }
+  elements.transitionConfirm.disabled = true;
+  try {
+    const moved = await moveOpportunity(transition.conversationId, transition.stageId, extras);
+    if (moved) closeTransitionModal();
+  } finally {
+    elements.transitionConfirm.disabled = false;
+  }
+}
+
+async function moveOpportunity(conversationId, stageId, extras = {}) {
+  const conversation = state.conversations.find((item) => Number(item.id) === Number(conversationId));
+  if (!conversation || getConversationStage(conversation) === stageId) return false;
+
+  const previousAttributes = { ...getCustomAttributes(conversation) };
+  const nextAttributes = { ...previousAttributes, ...extras, crm_stage: stageId };
+  conversation.custom_attributes = nextAttributes;
   renderAll();
 
   try {
-    await updateCustomAttributes(conversationId, conversation.custom_attributes);
+    await updateCustomAttributes(conversationId, nextAttributes);
     showToast(`Oportunidade movida para ${getStage(stageId).label}.`, "success");
+    return true;
   } catch (error) {
     conversation.custom_attributes = previousAttributes;
     renderAll();
     showToast(`Não foi possível mover a oportunidade: ${error.message}`, "error");
+    return false;
   }
 }
 
@@ -1006,7 +1194,7 @@ function populateFilterOptions() {
 
 function populateDrawerOptions() {
   elements.drawerStage.replaceChildren();
-  for (const stage of PIPELINE_STAGES) {
+  for (const stage of getVisiblePipelineStages()) {
     const option = document.createElement("option");
     option.value = stage.id;
     option.textContent = stage.label;
@@ -1037,7 +1225,7 @@ function fillSelect(select, items, placeholder) {
   }
 }
 
-async function openOpportunityDrawer(conversationId) {
+async function openOpportunityDrawer(conversationId, options = {}) {
   const conversation = state.conversations.find((item) => Number(item.id) === Number(conversationId));
   if (!conversation) return;
 
@@ -1074,6 +1262,13 @@ async function openOpportunityDrawer(conversationId) {
   elements.drawer.setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
   await loadMessages();
+  if (options.focus === "task") {
+    elements.drawerTask.focus();
+    elements.drawerTask.scrollIntoView({ behavior: "smooth", block: "center" });
+  } else if (options.focus === "assignee") {
+    elements.drawerAssignee.focus();
+    elements.drawerAssignee.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 }
 
 function closeOpportunityDrawer() {
@@ -1167,6 +1362,20 @@ async function saveOpportunity() {
   const conversationId = state.currentConversationId;
   const conversation = state.conversations.find((item) => Number(item.id) === conversationId);
   if (!conversation) return;
+
+  const selectedStage = elements.drawerStage.value;
+  const selectedValue = Number(elements.drawerValue.value || 0);
+  const selectedLossReason = elements.drawerLossReason.value.trim();
+  if (selectedStage === "won" && (!Number.isFinite(selectedValue) || selectedValue <= 0)) {
+    showToast("Informe um valor maior que zero antes de marcar como ganho.", "error");
+    elements.drawerValue.focus();
+    return;
+  }
+  if (selectedStage === "lost" && !selectedLossReason) {
+    showToast("Informe o motivo da perda antes de salvar.", "error");
+    elements.drawerLossReason.focus();
+    return;
+  }
 
   elements.saveOpportunity.disabled = true;
   try {
@@ -1304,6 +1513,16 @@ async function refreshSingleConversation(conversationId) {
   }
 }
 
+async function openInChatwootById(conversationId) {
+  if (!conversationId) return;
+  try {
+    const data = await apiRequest(`/build-url-to-redirect?conversationId=${conversationId}`);
+    window.open(data.url, "_blank", "noopener,noreferrer");
+  } catch (error) {
+    showToast(`Não foi possível abrir o Chatwoot: ${error.message}`, "error");
+  }
+}
+
 async function openInChatwoot() {
   const conversationId = state.currentConversationId;
   if (!conversationId) return;
@@ -1325,12 +1544,234 @@ async function bootstrapCrm() {
       `Já existentes: ${result.skipped?.length ? result.skipped.join(", ") : "nenhum"}`,
       result.errors?.length ? `Erros: ${JSON.stringify(result.errors, null, 2)}` : "Configuração concluída.",
     ].join("\n");
+    if (!result.errors?.length) await syncStageValues({ silent: false });
     showToast("Atributos CRM verificados.", result.errors?.length ? "error" : "success");
   } catch (error) {
     elements.bootstrapResult.textContent = `Erro: ${error.message}`;
     showToast(`Falha na configuração: ${error.message}`, "error");
   } finally {
     elements.bootstrapCrm.disabled = false;
+  }
+}
+
+function currentFilterSnapshot() {
+  return { search: state.search, filters: { ...state.filters } };
+}
+
+function persistFilterPresets() {
+  window.localStorage.setItem(STORAGE_KEYS.filterPresets, JSON.stringify(state.filterPresets));
+  if (state.activeFilterPresetId) {
+    window.localStorage.setItem(STORAGE_KEYS.activePreset, state.activeFilterPresetId);
+  } else {
+    window.localStorage.removeItem(STORAGE_KEYS.activePreset);
+  }
+}
+
+function restoreActiveFilterPreset() {
+  if (!state.activeFilterPresetId) return;
+  const preset = state.filterPresets.find((item) => item.id === state.activeFilterPresetId);
+  if (!preset) {
+    state.activeFilterPresetId = "";
+    persistFilterPresets();
+    return;
+  }
+  state.search = preset.search || "";
+  state.filters = { ...state.filters, ...(preset.filters || {}) };
+  elements.globalSearch.value = state.search;
+  elements.filterAssignee.value = state.filters.assignee || "";
+  elements.filterTeam.value = state.filters.team || "";
+  elements.filterInbox.value = state.filters.inbox || "";
+  elements.filterLabel.value = state.filters.label || "";
+  elements.filterPriority.value = state.filters.priority || "";
+  elements.filterTaskStatus.value = state.filters.taskStatus || "";
+}
+
+function renderFilterPresets() {
+  if (!elements.filterPreset) return;
+  elements.filterPreset.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Filtros salvos";
+  elements.filterPreset.appendChild(empty);
+  for (const preset of state.filterPresets) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = preset.name;
+    elements.filterPreset.appendChild(option);
+  }
+  elements.filterPreset.value = state.activeFilterPresetId;
+  elements.deleteFilterPreset.disabled = !state.activeFilterPresetId;
+}
+
+function saveCurrentFilterPreset() {
+  const name = window.prompt("Nome para este conjunto de filtros:");
+  if (!name || !name.trim()) return;
+  const id = `preset_${Date.now()}`;
+  state.filterPresets.push({ id, name: name.trim().slice(0, 60), ...currentFilterSnapshot() });
+  state.activeFilterPresetId = id;
+  persistFilterPresets();
+  renderFilterPresets();
+  showToast("Filtro salvo.", "success");
+}
+
+function applyFilterPreset(presetId) {
+  state.activeFilterPresetId = presetId;
+  const preset = state.filterPresets.find((item) => item.id === presetId);
+  if (!preset) {
+    persistFilterPresets();
+    renderFilterPresets();
+    return;
+  }
+  state.search = preset.search || "";
+  state.filters = { ...state.filters, ...(preset.filters || {}) };
+  elements.globalSearch.value = state.search;
+  elements.filterAssignee.value = state.filters.assignee || "";
+  elements.filterTeam.value = state.filters.team || "";
+  elements.filterInbox.value = state.filters.inbox || "";
+  elements.filterLabel.value = state.filters.label || "";
+  elements.filterPriority.value = state.filters.priority || "";
+  elements.filterTaskStatus.value = state.filters.taskStatus || "";
+  persistFilterPresets();
+  renderFilterPresets();
+  renderAll();
+}
+
+function deleteActiveFilterPreset() {
+  if (!state.activeFilterPresetId) return;
+  const preset = state.filterPresets.find((item) => item.id === state.activeFilterPresetId);
+  if (!preset || !window.confirm(`Excluir o filtro salvo “${preset.name}”?`)) return;
+  state.filterPresets = state.filterPresets.filter((item) => item.id !== state.activeFilterPresetId);
+  state.activeFilterPresetId = "";
+  persistFilterPresets();
+  renderFilterPresets();
+  showToast("Filtro excluído.", "success");
+}
+
+function renderStageManager() {
+  if (!elements.stageManagerList) return;
+  elements.stageManagerList.replaceChildren();
+  for (const [index, stage] of getAllPipelineStages().entries()) {
+    const row = createElement("div", `stage-manager-row ${stage.archived ? "is-archived" : ""}`);
+    const color = document.createElement("input");
+    color.type = "color";
+    color.value = stage.color;
+    color.title = "Cor da etapa";
+    color.addEventListener("change", () => {
+      stage.color = color.value;
+      savePipelineStages();
+      renderAll();
+    });
+    const name = document.createElement("input");
+    name.type = "text";
+    name.value = stage.label;
+    name.maxLength = 60;
+    name.addEventListener("change", () => {
+      const next = name.value.trim();
+      if (!next) return;
+      stage.label = next;
+      savePipelineStages();
+      populateDrawerOptions();
+      renderAll();
+    });
+    const code = createElement("code", null, stage.id);
+    const controls = createElement("div", "stage-manager-actions");
+    const up = createElement("button", "icon-button-small", "↑");
+    const down = createElement("button", "icon-button-small", "↓");
+    const archive = createElement("button", "button button-ghost button-small", stage.archived ? "Reativar" : "Arquivar");
+    const remove = createElement("button", "button button-danger button-small", "Excluir");
+    up.type = down.type = archive.type = remove.type = "button";
+    up.disabled = index === 0;
+    down.disabled = index === getAllPipelineStages().length - 1;
+    remove.disabled = stage.locked;
+    archive.disabled = stage.locked;
+    up.addEventListener("click", () => reorderStage(index, index - 1));
+    down.addEventListener("click", () => reorderStage(index, index + 1));
+    archive.addEventListener("click", () => toggleStageArchive(stage.id));
+    remove.addEventListener("click", () => deleteStage(stage.id));
+    controls.append(up, down, archive, remove);
+    const info = createElement("div", "stage-manager-info");
+    info.append(name, code);
+    row.append(color, info, controls);
+    elements.stageManagerList.appendChild(row);
+  }
+}
+
+function reorderStage(fromIndex, toIndex) {
+  if (toIndex < 0 || toIndex >= state.pipelineStages.length) return;
+  const [stage] = state.pipelineStages.splice(fromIndex, 1);
+  state.pipelineStages.splice(toIndex, 0, stage);
+  savePipelineStages();
+  renderStageManager();
+  populateDrawerOptions();
+  renderAll();
+}
+
+function stageOpportunityCount(stageId) {
+  return state.conversations.filter((conversation) => getConversationStage(conversation) === stageId).length;
+}
+
+function toggleStageArchive(stageId) {
+  const stage = getStage(stageId);
+  if (stage.locked) return;
+  if (!stage.archived && stageOpportunityCount(stageId) > 0) {
+    showToast("Mova as oportunidades desta etapa antes de arquivá-la.", "error");
+    return;
+  }
+  stage.archived = !stage.archived;
+  savePipelineStages();
+  renderStageManager();
+  populateDrawerOptions();
+  renderAll();
+}
+
+function deleteStage(stageId) {
+  const stage = getStage(stageId);
+  if (stage.locked) return;
+  if (stageOpportunityCount(stageId) > 0) {
+    showToast("Não é possível excluir uma etapa que contém oportunidades.", "error");
+    return;
+  }
+  if (!window.confirm(`Excluir a etapa “${stage.label}”?`)) return;
+  state.pipelineStages = state.pipelineStages.filter((item) => item.id !== stageId);
+  savePipelineStages();
+  renderStageManager();
+  populateDrawerOptions();
+  syncStageValues();
+  renderAll();
+}
+
+async function addPipelineStage(event) {
+  event.preventDefault();
+  const label = elements.newStageName.value.trim();
+  const color = elements.newStageColor.value;
+  let id = slugifyStage(label);
+  if (!label || !id) return;
+  if (getAllPipelineStages().some((stage) => stage.id === id)) {
+    id = `${id}_${Date.now().toString().slice(-5)}`;
+  }
+  state.pipelineStages.push({ id, label: label.slice(0, 60), color, archived: false });
+  savePipelineStages();
+  elements.newStageName.value = "";
+  renderStageManager();
+  populateDrawerOptions();
+  const synced = await syncStageValues();
+  renderAll();
+  if (synced) showToast("Etapa criada e sincronizada.", "success");
+}
+
+async function syncStageValues(options = {}) {
+  try {
+    await apiRequest("/api/crm/stages/sync", {
+      method: "POST",
+      body: JSON.stringify({ values: getAllPipelineStages().map((stage) => stage.id) }),
+    });
+    return true;
+  } catch (error) {
+    console.warn("Não foi possível sincronizar valores de crm_stage:", error.message);
+    if (!options.silent) {
+      showToast(`Etapa salva localmente, mas não sincronizada no Chatwoot: ${error.message}`, "error");
+    }
+    return false;
   }
 }
 
@@ -1365,6 +1806,8 @@ function switchView(viewName) {
 }
 
 function clearFilters() {
+  state.search = "";
+  elements.globalSearch.value = "";
   state.filters = {
     assignee: "",
     team: "",
@@ -1379,6 +1822,9 @@ function clearFilters() {
   elements.filterLabel.value = "";
   elements.filterPriority.value = "";
   elements.filterTaskStatus.value = "";
+  state.activeFilterPresetId = "";
+  persistFilterPresets();
+  renderFilterPresets();
   renderAll();
 }
 
@@ -1428,6 +1874,10 @@ function cacheElements() {
     filterPriority: byId("filter-priority"),
     filterTaskStatus: byId("filter-task-status"),
     clearFilters: byId("clear-filters"),
+    filterPreset: byId("filter-preset"),
+    saveFilterPreset: byId("save-filter-preset"),
+    deleteFilterPreset: byId("delete-filter-preset"),
+    managePipeline: byId("manage-pipeline"),
     pipelineResultCount: byId("pipeline-result-count"),
     conversationCount: byId("conversation-count"),
     conversationsTable: byId("conversations-table"),
@@ -1438,6 +1888,10 @@ function cacheElements() {
     contactsTable: byId("contacts-table"),
     bootstrapCrm: byId("bootstrap-crm"),
     bootstrapResult: byId("bootstrap-result"),
+    stageManagerList: byId("stage-manager-list"),
+    stageManagerForm: byId("stage-manager-form"),
+    newStageName: byId("new-stage-name"),
+    newStageColor: byId("new-stage-color"),
     logoutButton: byId("logout-button"),
     drawer: byId("opportunity-drawer"),
     drawerConversationId: byId("drawer-conversation-id"),
@@ -1464,6 +1918,15 @@ function cacheElements() {
     replyContent: byId("reply-content"),
     replyPrivate: byId("reply-private"),
     replySubmit: byId("reply-submit"),
+    transitionModal: byId("transition-modal"),
+    transitionForm: byId("transition-form"),
+    transitionModalTitle: byId("transition-modal-title"),
+    transitionModalDescription: byId("transition-modal-description"),
+    transitionValueField: byId("transition-value-field"),
+    transitionValue: byId("transition-value"),
+    transitionReasonField: byId("transition-reason-field"),
+    transitionReason: byId("transition-reason"),
+    transitionConfirm: byId("transition-confirm"),
     loadingOverlay: byId("loading-overlay"),
     loadingMessage: byId("loading-message"),
     toastContainer: byId("toast-container"),
@@ -1476,6 +1939,15 @@ function bindEvents() {
   elements.refreshButton.addEventListener("click", () => loadWorkspace({ background: false }));
   elements.bootstrapCrm.addEventListener("click", bootstrapCrm);
   elements.clearFilters.addEventListener("click", clearFilters);
+  elements.filterPreset.addEventListener("change", () => applyFilterPreset(elements.filterPreset.value));
+  elements.saveFilterPreset.addEventListener("click", saveCurrentFilterPreset);
+  elements.deleteFilterPreset.addEventListener("click", deleteActiveFilterPreset);
+  elements.managePipeline.addEventListener("click", () => switchView("settings"));
+  elements.stageManagerForm.addEventListener("submit", addPipelineStage);
+  elements.transitionForm.addEventListener("submit", confirmTransition);
+  document.querySelectorAll("[data-close-transition]").forEach((element) => {
+    element.addEventListener("click", closeTransitionModal);
+  });
   elements.drawerStage.addEventListener("change", toggleLossReason);
   elements.drawerTask.addEventListener("input", updateDrawerTaskState);
   elements.drawerDueDate.addEventListener("change", updateDrawerTaskState);
@@ -1499,6 +1971,9 @@ function bindEvents() {
 
   elements.globalSearch.addEventListener("input", () => {
     state.search = elements.globalSearch.value;
+    state.activeFilterPresetId = "";
+    persistFilterPresets();
+    renderFilterPresets();
     renderAll();
   });
 
@@ -1514,6 +1989,9 @@ function bindEvents() {
   for (const [select, key] of filterBindings) {
     select.addEventListener("change", () => {
       state.filters[key] = select.value;
+      state.activeFilterPresetId = "";
+      persistFilterPresets();
+      renderFilterPresets();
       renderAll();
     });
   }
@@ -1535,15 +2013,21 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && elements.drawer.classList.contains("is-open")) {
+    if (event.key !== "Escape") return;
+    if (elements.transitionModal.classList.contains("is-open")) {
+      closeTransitionModal();
+    } else if (elements.drawer.classList.contains("is-open")) {
       closeOpportunityDrawer();
     }
   });
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  loadLocalConfiguration();
   cacheElements();
   bindEvents();
+  renderFilterPresets();
+  renderStageManager();
   configureAutoRefresh();
   initializeSession();
 });
