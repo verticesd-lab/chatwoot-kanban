@@ -108,9 +108,20 @@
           <div class="topbar-actions">
             <label class="search-box">
               <span>⌕</span>
-              <input id="global-search" type="search" placeholder="Buscar nome, telefone, mensagem..." />
+              <input
+                id="global-search"
+                type="search"
+                placeholder="Buscar nome, telefone, conversa, mensagem..."
+              />
             </label>
-            <button id="refresh-button" class="icon-button" title="Atualizar dados">↻</button>
+            <div class="sync-control">
+              <span id="last-sync" class="sync-status">Aguardando sincronização</span>
+              <label class="auto-refresh-toggle" title="Atualiza a cada 60 segundos">
+                <input id="auto-refresh-toggle" type="checkbox" checked />
+                <span>Automático</span>
+              </label>
+            </div>
+            <button id="refresh-button" class="icon-button" title="Atualizar dados agora">↻</button>
           </div>
         </header>
 
@@ -166,7 +177,26 @@
               <select id="filter-label" aria-label="Filtrar por etiqueta">
                 <option value="">Todas as etiquetas</option>
               </select>
+              <select id="filter-priority" aria-label="Filtrar por prioridade">
+                <option value="">Todas as prioridades</option>
+                <option value="none">Sem prioridade</option>
+                <option value="low">Baixa</option>
+                <option value="medium">Média</option>
+                <option value="high">Alta</option>
+                <option value="urgent">Urgente</option>
+              </select>
+              <select id="filter-task-status" aria-label="Filtrar por situação da tarefa">
+                <option value="">Todas as tarefas</option>
+                <option value="none">Sem tarefa</option>
+                <option value="pending">Tarefa pendente</option>
+                <option value="overdue">Tarefa vencida</option>
+                <option value="done">Tarefa concluída</option>
+              </select>
               <button id="clear-filters" class="button button-ghost">Limpar filtros</button>
+            </div>
+            <div class="pipeline-hint">
+              <span>Arraste os cartões entre as etapas.</span>
+              <span id="pipeline-result-count">0 oportunidades exibidas</span>
             </div>
             <div id="pipeline-board" class="pipeline-board"></div>
           </section>
@@ -207,6 +237,13 @@
                 </div>
                 <span id="task-count" class="count-badge">0</span>
               </div>
+              <div class="task-toolbar" role="group" aria-label="Filtrar tarefas">
+                <button class="task-filter is-active" data-task-view-filter="all">Todas</button>
+                <button class="task-filter" data-task-view-filter="pending">Pendentes</button>
+                <button class="task-filter" data-task-view-filter="overdue">Vencidas</button>
+                <button class="task-filter" data-task-view-filter="done">Concluídas</button>
+              </div>
+              <div id="task-summary" class="task-summary"></div>
               <div id="tasks-list" class="task-list"></div>
             </article>
           </section>
@@ -329,6 +366,11 @@
                 <input id="drawer-task-done" type="checkbox" />
                 Tarefa concluída
               </label>
+              <div class="task-state-panel">
+                <span class="field-caption">Situação da tarefa</span>
+                <strong id="drawer-task-state">Sem tarefa</strong>
+                <small id="drawer-task-completed-at"></small>
+              </div>
             </div>
             <label id="loss-reason-field" class="is-hidden">
               Motivo da perda

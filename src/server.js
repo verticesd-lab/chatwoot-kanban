@@ -107,7 +107,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.1.0",
+    version: "1.1.1",
   });
 });
 
@@ -217,6 +217,14 @@ const CRM_ATTRIBUTE_DEFINITIONS = [
     attribute_display_type: 7,
     attribute_description: "Indica se a próxima tarefa foi concluída",
     attribute_key: "crm_task_done",
+    attribute_values: [],
+    attribute_model: 0,
+  },
+  {
+    attribute_display_name: "Conclusão da tarefa",
+    attribute_display_type: 0,
+    attribute_description: "Data e hora em que a tarefa foi concluída",
+    attribute_key: "crm_task_completed_at",
     attribute_values: [],
     attribute_model: 0,
   },

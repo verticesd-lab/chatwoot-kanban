@@ -25,8 +25,15 @@ const state = {
     team: "",
     inbox: "",
     label: "",
+    priority: "",
+    taskStatus: "",
   },
+  taskViewFilter: "all",
   draggingConversationId: null,
+  lastSyncAt: null,
+  refreshTimer: null,
+  syncStatusTimer: null,
+  isLoadingWorkspace: false,
 };
 
 const elements = {};
@@ -56,6 +63,16 @@ function getAssignee(conversation) {
 
 function getTeam(conversation) {
   return conversation?.meta?.team || conversation?.team || null;
+}
+
+function getInbox(conversation) {
+  const inboxId = Number(conversation?.inbox_id || conversation?.inbox?.id || 0);
+  if (!inboxId) return conversation?.inbox || null;
+  return (
+    state.inboxes.find((inbox) => Number(inbox.id) === inboxId) ||
+    conversation?.inbox ||
+    null
+  );
 }
 
 function getLabels(conversation) {
@@ -106,7 +123,13 @@ function conversationActivityTimestamp(conversation) {
 }
 
 function formatDate(value, options = {}) {
-  const timestamp = getTimestamp(value);
+  let timestamp = null;
+  if (options.dateOnly && /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) {
+    const [year, month, day] = String(value).split("-").map(Number);
+    timestamp = new Date(year, month - 1, day, 12, 0, 0).getTime();
+  } else {
+    timestamp = getTimestamp(value);
+  }
   if (!timestamp) return "—";
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
@@ -152,6 +175,56 @@ function isOverdue(dateValue, done = false) {
   if (!dateValue || done) return false;
   const due = new Date(`${dateValue}T23:59:59`);
   return Number.isFinite(due.getTime()) && due.getTime() < Date.now();
+}
+
+function isTrue(value) {
+  return value === true || String(value || "").toLowerCase() === "true";
+}
+
+function getTaskStatus(conversation) {
+  const attributes = getCustomAttributes(conversation);
+  if (!String(attributes.crm_next_task || "").trim()) return "none";
+  if (isTrue(attributes.crm_task_done)) return "done";
+  if (isOverdue(attributes.crm_task_due_at, false)) return "overdue";
+  return "pending";
+}
+
+function taskStatusLabel(status) {
+  return {
+    none: "Sem tarefa",
+    pending: "Pendente",
+    overdue: "Vencida",
+    done: "Concluída",
+  }[status] || "Sem tarefa";
+}
+
+function priorityLabel(priority) {
+  return {
+    none: "Sem prioridade",
+    low: "Baixa",
+    medium: "Média",
+    high: "Alta",
+    urgent: "Urgente",
+  }[priority || "none"] || priority || "Sem prioridade";
+}
+
+function idleClass(conversation) {
+  const timestamp = conversationActivityTimestamp(conversation);
+  if (!timestamp) return "";
+  const hours = (Date.now() - timestamp) / 3600000;
+  if (hours >= 24) return "idle-critical";
+  if (hours >= 4) return "idle-warning";
+  return "idle-ok";
+}
+
+function updateSyncStatus() {
+  if (!elements.lastSync) return;
+  if (!state.lastSyncAt) {
+    elements.lastSync.textContent = "Aguardando sincronização";
+    return;
+  }
+  elements.lastSync.textContent = `Atualizado ${formatRelativeTime(state.lastSyncAt).toLowerCase()}`;
+  elements.lastSync.title = formatDate(state.lastSyncAt);
 }
 
 function setLoading(isLoading, message = "Carregando dados...") {
@@ -282,8 +355,12 @@ async function fetchAllConversations() {
   return conversations;
 }
 
-async function loadWorkspace() {
-  setLoading(true, "Sincronizando conversas e equipe...");
+async function loadWorkspace(options = {}) {
+  const background = options.background === true;
+  if (state.isLoadingWorkspace) return;
+  state.isLoadingWorkspace = true;
+  if (!background) setLoading(true, "Sincronizando conversas e equipe...");
+  elements.refreshButton?.classList.add("is-spinning");
   try {
     const [conversations, agents, teams, inboxData, labelsData] = await Promise.all([
       fetchAllConversations(),
@@ -303,6 +380,8 @@ async function loadWorkspace() {
 
     populateFilterOptions();
     populateDrawerOptions();
+    state.lastSyncAt = Date.now();
+    updateSyncStatus();
     renderAll();
   } catch (error) {
     if (error.status === 401) {
@@ -313,7 +392,9 @@ async function loadWorkspace() {
     console.error(error);
     showToast(`Erro ao carregar dados: ${error.message}`, "error");
   } finally {
-    setLoading(false);
+    state.isLoadingWorkspace = false;
+    elements.refreshButton?.classList.remove("is-spinning");
+    if (!background) setLoading(false);
   }
 }
 
@@ -336,6 +417,18 @@ function filteredConversations() {
       return false;
     }
     if (state.filters.label && !labels.includes(state.filters.label)) {
+      return false;
+    }
+    if (
+      state.filters.priority &&
+      String(conversation.priority || "none") !== state.filters.priority
+    ) {
+      return false;
+    }
+    if (
+      state.filters.taskStatus &&
+      getTaskStatus(conversation) !== state.filters.taskStatus
+    ) {
       return false;
     }
 
@@ -374,7 +467,7 @@ function renderDashboard() {
   const won = conversations.filter((conversation) => getConversationStage(conversation) === "won");
   const pendingTasks = conversations.filter((conversation) => {
     const attributes = getCustomAttributes(conversation);
-    return attributes.crm_next_task && attributes.crm_task_done !== true && attributes.crm_task_done !== "true";
+    return attributes.crm_next_task && !isTrue(attributes.crm_task_done);
   });
   const overdueTasks = pendingTasks.filter((conversation) => {
     const attributes = getCustomAttributes(conversation);
@@ -519,6 +612,9 @@ function renderRecentConversations(conversations) {
 function renderPipeline() {
   const conversations = filteredConversations();
   elements.pipelineBoard.replaceChildren();
+  elements.pipelineResultCount.textContent = `${conversations.length} ${
+    conversations.length === 1 ? "oportunidade exibida" : "oportunidades exibidas"
+  }`;
 
   for (const stage of PIPELINE_STAGES) {
     const stageConversations = conversations.filter(
@@ -569,10 +665,16 @@ function createOpportunityCard(conversation) {
   const sender = getSender(conversation);
   const attributes = getCustomAttributes(conversation);
   const assignee = getAssignee(conversation);
+  const team = getTeam(conversation);
+  const inbox = getInbox(conversation);
   const labels = getLabels(conversation);
-  const card = createElement("article", "opportunity-card");
+  const taskStatus = getTaskStatus(conversation);
+  const card = createElement("article", `opportunity-card ${idleClass(conversation)}`);
   card.draggable = true;
   card.dataset.id = String(conversation.id);
+  card.title = `Conversa #${conversation.id} · ${formatDate(
+    conversationActivityTimestamp(conversation)
+  )}`;
 
   const top = createElement("div", "card-top");
   top.append(
@@ -585,30 +687,62 @@ function createOpportunityCard(conversation) {
 
   const badges = createElement("div", "card-badges");
   if (conversation.priority && conversation.priority !== "none") {
-    badges.appendChild(createElement("span", `badge ${conversation.priority}`, conversation.priority));
+    badges.appendChild(
+      createElement("span", `badge ${conversation.priority}`, priorityLabel(conversation.priority))
+    );
   }
   if (Number(conversation.unread_count || 0) > 0) {
     badges.appendChild(createElement("span", "badge unread", `${conversation.unread_count} não lida(s)`));
   }
-  for (const label of labels.slice(0, 2)) badges.appendChild(createElement("span", "badge", label));
+  for (const label of labels.slice(0, 3)) {
+    badges.appendChild(createElement("span", "badge", label));
+  }
+  if (labels.length > 3) {
+    badges.appendChild(createElement("span", "badge badge-more", `+${labels.length - 3}`));
+  }
   card.appendChild(badges);
+
+  const context = createElement("div", "card-context");
+  const contextItems = [
+    assignee?.name ? `👤 ${assignee.name}` : "👤 Sem responsável",
+    team?.name ? `👥 ${team.name}` : null,
+    inbox?.name ? `▣ ${inbox.name}` : null,
+  ].filter(Boolean);
+  for (const item of contextItems) {
+    context.appendChild(createElement("span", null, item));
+  }
+  card.appendChild(context);
 
   const footer = createElement("div", "card-footer");
   const value = parseCurrency(attributes.crm_value);
   footer.append(
-    createElement("span", "card-value", value ? formatCurrency(value) : assignee?.name || "Sem responsável"),
-    createElement("span", "card-meta", formatRelativeTime(conversationActivityTimestamp(conversation)))
+    createElement("span", "card-value", value ? formatCurrency(value) : "Sem valor"),
+    createElement(
+      "span",
+      `card-meta activity-age ${idleClass(conversation)}`,
+      `${formatRelativeTime(conversationActivityTimestamp(conversation))} sem interação`
+    )
   );
   card.appendChild(footer);
 
-  if (attributes.crm_next_task && attributes.crm_task_done !== true && attributes.crm_task_done !== "true") {
+  if (taskStatus !== "none") {
+    const taskHeader = createElement("div", "card-task-header");
+    taskHeader.append(
+      createElement("span", `task-status task-status-${taskStatus}`, taskStatusLabel(taskStatus)),
+      attributes.crm_task_due_at
+        ? createElement(
+            "span",
+            `task-due ${taskStatus === "overdue" ? "overdue" : ""}`,
+            formatDate(attributes.crm_task_due_at, { dateOnly: true })
+          )
+        : createElement("span", "task-due", "Sem prazo")
+    );
     const task = createElement(
       "div",
-      `task-due ${isOverdue(attributes.crm_task_due_at) ? "overdue" : ""}`,
-      `↳ ${attributes.crm_next_task}${attributes.crm_task_due_at ? ` · ${formatDate(attributes.crm_task_due_at, { dateOnly: true })}` : ""}`
+      "card-task",
+      attributes.crm_next_task
     );
-    task.style.marginTop = "8px";
-    card.appendChild(task);
+    card.append(taskHeader, task);
   }
 
   card.addEventListener("dragstart", () => {
@@ -687,15 +821,51 @@ function renderConversationsTable() {
 }
 
 function renderTasks() {
-  const tasks = filteredConversations()
+  const allTasks = filteredConversations()
     .filter((conversation) => getCustomAttributes(conversation).crm_next_task)
     .sort((a, b) => {
+      const aStatus = getTaskStatus(a);
+      const bStatus = getTaskStatus(b);
+      const rank = { overdue: 0, pending: 1, done: 2, none: 3 };
+      if (rank[aStatus] !== rank[bStatus]) return rank[aStatus] - rank[bStatus];
       const aDate = getCustomAttributes(a).crm_task_due_at || "9999-12-31";
       const bDate = getCustomAttributes(b).crm_task_due_at || "9999-12-31";
       return aDate.localeCompare(bDate);
     });
 
-  elements.taskCount.textContent = String(tasks.length);
+  const counts = {
+    all: allTasks.length,
+    pending: allTasks.filter((conversation) => getTaskStatus(conversation) === "pending").length,
+    overdue: allTasks.filter((conversation) => getTaskStatus(conversation) === "overdue").length,
+    done: allTasks.filter((conversation) => getTaskStatus(conversation) === "done").length,
+  };
+
+  const tasks =
+    state.taskViewFilter === "all"
+      ? allTasks
+      : allTasks.filter((conversation) => getTaskStatus(conversation) === state.taskViewFilter);
+
+  elements.taskCount.textContent = String(allTasks.length);
+  elements.taskSummary.replaceChildren();
+  for (const [key, label] of [
+    ["pending", "Pendentes"],
+    ["overdue", "Vencidas"],
+    ["done", "Concluídas"],
+  ]) {
+    const summary = createElement("div", `task-summary-card ${key}`);
+    summary.append(createElement("strong", null, counts[key]), createElement("span", null, label));
+    elements.taskSummary.appendChild(summary);
+  }
+
+  document.querySelectorAll("[data-task-view-filter]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.taskViewFilter === state.taskViewFilter);
+    const key = button.dataset.taskViewFilter;
+    if (counts[key] !== undefined) {
+      button.textContent = `${button.textContent.replace(/\s+\(\d+\)$/, "")} (${counts[key]})`;
+    } else if (key === "all") {
+      button.textContent = `Todas (${counts.all})`;
+    }
+  });
   elements.tasksList.replaceChildren();
 
   if (!tasks.length) {
@@ -706,22 +876,76 @@ function renderTasks() {
   for (const conversation of tasks) {
     const sender = getSender(conversation);
     const attributes = getCustomAttributes(conversation);
-    const done = attributes.crm_task_done === true || attributes.crm_task_done === "true";
-    const item = createElement("div", `task-item ${done ? "is-complete" : ""}`);
+    const status = getTaskStatus(conversation);
+    const done = status === "done";
+    const item = createElement("div", `task-item task-${status} ${done ? "is-complete" : ""}`);
     const button = createElement("button");
     button.type = "button";
     button.append(
       createElement("strong", null, `${done ? "✓ " : ""}${attributes.crm_next_task}`),
-      createElement("span", null, `${sender.name || `Conversa #${conversation.id}`} · ${getStage(getConversationStage(conversation)).label}`)
+      createElement(
+        "span",
+        null,
+        `${sender.name || `Conversa #${conversation.id}`} · #${conversation.id} · ${getStage(
+          getConversationStage(conversation)
+        ).label}`
+      )
     );
     button.addEventListener("click", () => openOpportunityDrawer(conversation.id));
+    const actions = createElement("div", "task-actions");
+    const statusChip = createElement(
+      "span",
+      `task-status task-status-${status}`,
+      taskStatusLabel(status)
+    );
+    const dueText = done && attributes.crm_task_completed_at
+      ? `Concluída em ${formatDate(attributes.crm_task_completed_at)}`
+      : attributes.crm_task_due_at
+        ? formatDate(attributes.crm_task_due_at, { dateOnly: true })
+        : "Sem prazo";
     const due = createElement(
       "span",
-      `task-due ${isOverdue(attributes.crm_task_due_at, done) ? "overdue" : ""}`,
-      attributes.crm_task_due_at ? formatDate(attributes.crm_task_due_at, { dateOnly: true }) : "Sem prazo"
+      `task-due ${status === "overdue" ? "overdue" : ""}`,
+      dueText
     );
-    item.append(button, due);
+    const toggle = createElement(
+      "button",
+      `task-toggle ${done ? "is-done" : ""}`,
+      done ? "Reabrir" : "Concluir"
+    );
+    toggle.type = "button";
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleTaskCompletion(conversation.id, !done);
+    });
+    actions.append(statusChip, due, toggle);
+    item.append(button, actions);
     elements.tasksList.appendChild(item);
+  }
+}
+
+async function toggleTaskCompletion(conversationId, done) {
+  const conversation = state.conversations.find(
+    (item) => Number(item.id) === Number(conversationId)
+  );
+  if (!conversation) return;
+
+  const previous = getCustomAttributes(conversation);
+  const next = {
+    ...previous,
+    crm_task_done: done,
+    crm_task_completed_at: done ? new Date().toISOString() : null,
+  };
+  conversation.custom_attributes = next;
+  renderAll();
+
+  try {
+    await updateCustomAttributes(conversationId, next);
+    showToast(done ? "Tarefa concluída." : "Tarefa reaberta.", "success");
+  } catch (error) {
+    conversation.custom_attributes = previous;
+    renderAll();
+    showToast(`Não foi possível atualizar a tarefa: ${error.message}`, "error");
   }
 }
 
@@ -835,9 +1059,11 @@ async function openOpportunityDrawer(conversationId) {
   elements.drawerTeam.value = team?.id ? String(team.id) : "";
   elements.drawerTask.value = attributes.crm_next_task || "";
   elements.drawerDueDate.value = attributes.crm_task_due_at || "";
-  elements.drawerTaskDone.checked = attributes.crm_task_done === true || attributes.crm_task_done === "true";
+  elements.drawerTaskDone.checked = isTrue(attributes.crm_task_done);
+  elements.drawerTaskCompletedAt.dataset.value = attributes.crm_task_completed_at || "";
   elements.drawerLossReason.value = attributes.crm_loss_reason || "";
   toggleLossReason();
+  updateDrawerTaskState();
 
   elements.drawerLabels.replaceChildren();
   for (const label of getLabels(conversation)) {
@@ -859,6 +1085,28 @@ function closeOpportunityDrawer() {
 
 function toggleLossReason() {
   elements.lossReasonField.classList.toggle("is-hidden", elements.drawerStage.value !== "lost");
+}
+
+function updateDrawerTaskState() {
+  const task = elements.drawerTask.value.trim();
+  const done = elements.drawerTaskDone.checked;
+  const due = elements.drawerDueDate.value;
+  let status = "none";
+  if (task) {
+    status = done ? "done" : isOverdue(due, false) ? "overdue" : "pending";
+  }
+  elements.drawerTaskState.textContent = taskStatusLabel(status);
+  elements.drawerTaskState.className = `task-state-value task-state-${status}`;
+
+  const completedAt = elements.drawerTaskCompletedAt.dataset.value;
+  elements.drawerTaskCompletedAt.textContent =
+    status === "done" && completedAt
+      ? `Concluída em ${formatDate(completedAt)}`
+      : status === "overdue"
+        ? "O prazo informado já venceu."
+        : status === "pending" && due
+          ? `Prazo: ${formatDate(due, { dateOnly: true })}`
+          : "";
 }
 
 async function loadMessages() {
@@ -922,13 +1170,22 @@ async function saveOpportunity() {
 
   elements.saveOpportunity.disabled = true;
   try {
+    const previousAttributes = getCustomAttributes(conversation);
+    const previousDone = isTrue(previousAttributes.crm_task_done);
+    const nextTask = elements.drawerTask.value.trim();
+    const nextDone = Boolean(nextTask && elements.drawerTaskDone.checked);
+    let completedAt = previousAttributes.crm_task_completed_at || null;
+    if (nextDone && (!previousDone || !completedAt)) completedAt = new Date().toISOString();
+    if (!nextDone) completedAt = null;
+
     const customAttributes = {
-      ...getCustomAttributes(conversation),
+      ...previousAttributes,
       crm_stage: elements.drawerStage.value,
       crm_value: elements.drawerValue.value ? Number(elements.drawerValue.value) : null,
-      crm_next_task: elements.drawerTask.value.trim(),
+      crm_next_task: nextTask,
       crm_task_due_at: elements.drawerDueDate.value || null,
-      crm_task_done: elements.drawerTaskDone.checked,
+      crm_task_done: nextDone,
+      crm_task_completed_at: completedAt,
       crm_loss_reason: elements.drawerStage.value === "lost" ? elements.drawerLossReason.value.trim() : "",
     };
 
@@ -971,6 +1228,9 @@ async function saveOpportunity() {
     conversation.meta.team = selectedTeam
       ? state.teams.find((team) => String(team.id) === selectedTeam) || null
       : null;
+
+    elements.drawerTaskCompletedAt.dataset.value = completedAt || "";
+    updateDrawerTaskState();
 
     renderAll();
     showToast("Oportunidade atualizada.", "success");
@@ -1105,12 +1365,38 @@ function switchView(viewName) {
 }
 
 function clearFilters() {
-  state.filters = { assignee: "", team: "", inbox: "", label: "" };
+  state.filters = {
+    assignee: "",
+    team: "",
+    inbox: "",
+    label: "",
+    priority: "",
+    taskStatus: "",
+  };
   elements.filterAssignee.value = "";
   elements.filterTeam.value = "";
   elements.filterInbox.value = "";
   elements.filterLabel.value = "";
+  elements.filterPriority.value = "";
+  elements.filterTaskStatus.value = "";
   renderAll();
+}
+
+function configureAutoRefresh() {
+  if (state.refreshTimer) window.clearInterval(state.refreshTimer);
+  if (state.syncStatusTimer) window.clearInterval(state.syncStatusTimer);
+
+  state.refreshTimer = window.setInterval(() => {
+    if (
+      elements.autoRefreshToggle?.checked &&
+      !document.hidden &&
+      !elements.app.classList.contains("is-hidden")
+    ) {
+      loadWorkspace({ background: true });
+    }
+  }, 60000);
+
+  state.syncStatusTimer = window.setInterval(updateSyncStatus, 15000);
 }
 
 function cacheElements() {
@@ -1128,6 +1414,8 @@ function cacheElements() {
     pageTitle: byId("page-title"),
     globalSearch: byId("global-search"),
     refreshButton: byId("refresh-button"),
+    lastSync: byId("last-sync"),
+    autoRefreshToggle: byId("auto-refresh-toggle"),
     metricsGrid: byId("metrics-grid"),
     stageOverview: byId("stage-overview"),
     dashboardTasks: byId("dashboard-tasks"),
@@ -1137,10 +1425,14 @@ function cacheElements() {
     filterTeam: byId("filter-team"),
     filterInbox: byId("filter-inbox"),
     filterLabel: byId("filter-label"),
+    filterPriority: byId("filter-priority"),
+    filterTaskStatus: byId("filter-task-status"),
     clearFilters: byId("clear-filters"),
+    pipelineResultCount: byId("pipeline-result-count"),
     conversationCount: byId("conversation-count"),
     conversationsTable: byId("conversations-table"),
     taskCount: byId("task-count"),
+    taskSummary: byId("task-summary"),
     tasksList: byId("tasks-list"),
     contactCount: byId("contact-count"),
     contactsTable: byId("contacts-table"),
@@ -1159,6 +1451,8 @@ function cacheElements() {
     drawerTask: byId("drawer-task"),
     drawerDueDate: byId("drawer-due-date"),
     drawerTaskDone: byId("drawer-task-done"),
+    drawerTaskState: byId("drawer-task-state"),
+    drawerTaskCompletedAt: byId("drawer-task-completed-at"),
     lossReasonField: byId("loss-reason-field"),
     drawerLossReason: byId("drawer-loss-reason"),
     drawerLabels: byId("drawer-labels"),
@@ -1179,10 +1473,13 @@ function cacheElements() {
 function bindEvents() {
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.logoutButton.addEventListener("click", logout);
-  elements.refreshButton.addEventListener("click", loadWorkspace);
+  elements.refreshButton.addEventListener("click", () => loadWorkspace({ background: false }));
   elements.bootstrapCrm.addEventListener("click", bootstrapCrm);
   elements.clearFilters.addEventListener("click", clearFilters);
   elements.drawerStage.addEventListener("change", toggleLossReason);
+  elements.drawerTask.addEventListener("input", updateDrawerTaskState);
+  elements.drawerDueDate.addEventListener("change", updateDrawerTaskState);
+  elements.drawerTaskDone.addEventListener("change", updateDrawerTaskState);
   elements.saveOpportunity.addEventListener("click", saveOpportunity);
   elements.openChatwoot.addEventListener("click", openInChatwoot);
   elements.reloadMessages.addEventListener("click", loadMessages);
@@ -1210,6 +1507,8 @@ function bindEvents() {
     [elements.filterTeam, "team"],
     [elements.filterInbox, "inbox"],
     [elements.filterLabel, "label"],
+    [elements.filterPriority, "priority"],
+    [elements.filterTaskStatus, "taskStatus"],
   ];
 
   for (const [select, key] of filterBindings) {
@@ -1218,6 +1517,22 @@ function bindEvents() {
       renderAll();
     });
   }
+
+  document.querySelectorAll("[data-task-view-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.taskViewFilter = button.dataset.taskViewFilter || "all";
+      renderTasks();
+    });
+  });
+
+  elements.autoRefreshToggle.addEventListener("change", () => {
+    showToast(
+      elements.autoRefreshToggle.checked
+        ? "Atualização automática ativada."
+        : "Atualização automática pausada.",
+      "success"
+    );
+  });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && elements.drawer.classList.contains("is-open")) {
@@ -1229,5 +1544,6 @@ function bindEvents() {
 document.addEventListener("DOMContentLoaded", () => {
   cacheElements();
   bindEvents();
+  configureAutoRefresh();
   initializeSession();
 });

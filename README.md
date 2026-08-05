@@ -1,3 +1,6 @@
+
+> **CRM V1.1 operacional disponível nesta branch:** pipeline comercial, tarefas com estados, atualização automática, filtros avançados e painel lateral integrado ao Chatwoot. Consulte `CRM_V1_README.md`.
+
 # Chatwoot Kanban - Sistema de Gerenciamento de Conversas
 
 ## 📋 Descrição
