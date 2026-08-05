@@ -41,6 +41,12 @@ app.use(express.json({ limit: "1mb" }));
 app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "index.html")));
 app.get("/script.js", (_req, res) => res.sendFile(path.join(__dirname, "script.js")));
 app.get("/styles.css", (_req, res) => res.sendFile(path.join(__dirname, "styles.css")));
+app.use(
+  "/assets",
+  express.static(path.join(__dirname, "assets"), {
+    maxAge: "1h",
+  })
+);
 
 function parseCookies(header = "") {
   return header.split(";").reduce((cookies, part) => {

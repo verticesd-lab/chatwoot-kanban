@@ -5,10 +5,10 @@
   --text: #172033;
   --muted: #697386;
   --border: #e2e8f0;
-  --sidebar: #111827;
-  --sidebar-soft: #1f2937;
-  --primary: #2563eb;
-  --primary-dark: #1d4ed8;
+  --sidebar: #080808;
+  --sidebar-soft: #1a160d;
+  --primary: #d4a72c;
+  --primary-dark: #b88616;
   --success: #059669;
   --warning: #d97706;
   --danger: #dc2626;
@@ -54,7 +54,7 @@ button {
 
 .eyebrow {
   margin: 0 0 4px;
-  color: #8490a6;
+  color: #a67f1e;
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -67,11 +67,11 @@ button {
   display: grid;
   place-items: center;
   border-radius: 15px;
-  color: #fff;
-  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  color: #111;
+  background: linear-gradient(135deg, #f0ca55, #b88616);
   font-size: 24px;
   font-weight: 900;
-  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.28);
+  box-shadow: 0 12px 28px rgba(212, 167, 44, 0.25);
 }
 
 .brand-mark-small {
@@ -82,29 +82,61 @@ button {
   box-shadow: none;
 }
 
+.login-brand {
+  text-align: center;
+}
+
+.login-brand-logo {
+  width: min(100%, 330px);
+  display: block;
+  margin: 0 auto 14px;
+  border-radius: 14px;
+}
+
+.sidebar-brand-symbol {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border: 1px solid rgba(230, 187, 60, 0.42);
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+}
+
 .login-screen {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 24px;
   background:
-    radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 35%),
-    radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.16), transparent 35%),
-    #0f172a;
+    radial-gradient(circle at 50% 0%, rgba(212, 167, 44, 0.18), transparent 34%),
+    radial-gradient(circle at 100% 100%, rgba(212, 167, 44, 0.1), transparent 30%),
+    #050505;
 }
 
 .login-card {
-  width: min(100%, 460px);
-  padding: 38px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: min(100%, 500px);
+  padding: 34px 40px 38px;
+  border: 1px solid rgba(212, 167, 44, 0.48);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.97);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.3);
+  color: #f8fafc;
+  background: linear-gradient(180deg, rgba(20, 20, 20, 0.98), rgba(8, 8, 8, 0.98));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58), 0 0 36px rgba(212, 167, 44, 0.08);
 }
 
 .login-card h1 {
-  margin: 18px 0 8px;
+  margin: 10px 0 8px;
+  color: #ffffff;
   font-size: 30px;
+}
+
+.login-card .muted {
+  color: #c7c7c7;
+  line-height: 1.55;
+}
+
+.login-card .eyebrow {
+  color: #d9ad36;
 }
 
 .login-card label,
@@ -116,6 +148,25 @@ button {
   color: #374151;
   font-size: 13px;
   font-weight: 700;
+}
+
+.login-card label {
+  color: #e2bd53;
+}
+
+.login-card input {
+  border-color: rgba(212, 167, 44, 0.58);
+  color: #ffffff;
+  background: #111111;
+}
+
+.login-card input::placeholder {
+  color: #8e8e8e;
+}
+
+.login-card input:focus {
+  border-color: #e6bb3c;
+  box-shadow: 0 0 0 3px rgba(230, 187, 60, 0.16);
 }
 
 input,
@@ -139,8 +190,8 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: #60a5fa;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: #d4a72c;
+  box-shadow: 0 0 0 3px rgba(212, 167, 44, 0.18);
 }
 
 .form-error {
@@ -175,12 +226,13 @@ textarea:focus {
 }
 
 .button-primary {
-  color: #fff;
-  background: var(--primary);
+  color: #111111;
+  background: linear-gradient(135deg, #f0ca55, var(--primary));
+  box-shadow: 0 8px 20px rgba(212, 167, 44, 0.18);
 }
 
 .button-primary:hover {
-  background: var(--primary-dark);
+  background: linear-gradient(135deg, #e1b83d, var(--primary-dark));
 }
 
 .button-ghost {
@@ -212,15 +264,16 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   padding: 20px 14px;
-  color: #e5e7eb;
-  background: var(--sidebar);
+  color: #f3f4f6;
+  border-right: 1px solid rgba(212, 167, 44, 0.2);
+  background: linear-gradient(180deg, #0b0b0b, var(--sidebar));
 }
 
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 8px 24px;
+  gap: 11px;
+  padding: 4px 6px 24px;
 }
 
 .sidebar-brand strong,
@@ -231,13 +284,16 @@ textarea:focus {
 }
 
 .sidebar-brand strong {
-  font-size: 15px;
+  max-width: 158px;
+  color: #ffffff;
+  font-size: 13px;
+  line-height: 1.25;
 }
 
 .sidebar-brand span,
 .sidebar-account span {
   margin-top: 2px;
-  color: #94a3b8;
+  color: #d0ad50;
   font-size: 11px;
 }
 
@@ -253,7 +309,7 @@ textarea:focus {
   gap: 11px;
   padding: 11px 12px;
   border-radius: 10px;
-  color: #cbd5e1;
+  color: #d6d6d6;
   background: transparent;
   cursor: pointer;
   text-align: left;
@@ -263,18 +319,18 @@ textarea:focus {
 
 .nav-item:hover,
 .nav-item.is-active {
-  color: #fff;
-  background: var(--sidebar-soft);
+  color: #ffffff;
+  background: linear-gradient(90deg, rgba(212, 167, 44, 0.18), rgba(212, 167, 44, 0.05));
 }
 
 .nav-item.is-active {
-  box-shadow: inset 3px 0 0 #60a5fa;
+  box-shadow: inset 3px 0 0 #e6bb3c;
 }
 
 .nav-icon {
   width: 22px;
   text-align: center;
-  color: #93c5fd;
+  color: #f2c94c;
   font-size: 17px;
 }
 
@@ -291,9 +347,9 @@ textarea:focus {
   align-items: center;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #2b3547;
+  border: 1px solid rgba(212, 167, 44, 0.28);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(212, 167, 44, 0.06);
   font-size: 12px;
 }
 
@@ -638,7 +694,7 @@ textarea:focus {
 }
 
 .pipeline-column.is-drag-over {
-  outline: 2px dashed #60a5fa;
+  outline: 2px dashed #d4a72c;
   outline-offset: 2px;
 }
 
@@ -866,8 +922,8 @@ textarea:focus {
 }
 
 .badge.unread {
-  color: #1e40af;
-  background: #dbeafe;
+  color: #875b00;
+  background: #fff2bf;
 }
 
 .label-chip {
@@ -902,8 +958,8 @@ textarea:focus {
 }
 
 .task-status-pending {
-  color: #1e40af;
-  background: #dbeafe;
+  color: #875b00;
+  background: #fff2bf;
 }
 
 .task-status-overdue {
@@ -1035,7 +1091,7 @@ tbody tr:hover {
 }
 
 .task-summary-card.pending strong {
-  color: #1d4ed8;
+  color: #b88616;
 }
 
 .task-summary-card.done strong {
@@ -1052,10 +1108,10 @@ tbody tr:hover {
 
 .task-toggle {
   padding: 6px 9px !important;
-  border: 1px solid #bfdbfe;
+  border: 1px solid #efd47a;
   border-radius: 8px;
-  color: #1d4ed8 !important;
-  background: #eff6ff !important;
+  color: #b88616 !important;
+  background: #fff9df !important;
   font-size: 10px;
   font-weight: 900;
 }
@@ -1097,7 +1153,7 @@ tbody tr:hover {
 }
 
 .task-state-pending {
-  color: #1d4ed8;
+  color: #b88616;
 }
 
 .task-state-panel small {
@@ -1266,7 +1322,7 @@ tbody tr:hover {
 .message-bubble.outgoing {
   justify-self: end;
   color: #fff;
-  background: #1d4ed8;
+  background: #b88616;
 }
 
 .message-bubble.private {
@@ -1372,6 +1428,16 @@ tbody tr:hover {
 
   .sync-control {
     display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .login-card {
+    padding: 28px 22px 32px;
+  }
+
+  .login-brand-logo {
+    width: min(100%, 290px);
   }
 }
 
