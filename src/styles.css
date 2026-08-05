@@ -1635,3 +1635,116 @@ tbody tr:hover {
   .stage-manager-form { grid-template-columns: 1fr 52px; }
   .stage-manager-form .button { grid-column: 1 / -1; }
 }
+
+/* CRM V1.3 — fundação centralizada */
+.pipeline-settings-panel.is-readonly::before {
+  display: block;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  color: #92400e;
+  background: #fffbeb;
+  content: "Seu perfil pode visualizar o pipeline, mas não alterar suas etapas.";
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.crm-user-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(190px, 1.2fr);
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.crm-user-form .button,
+.crm-user-form select {
+  min-height: 42px;
+}
+
+.crm-users-list,
+.audit-list {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.crm-user-row,
+.audit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.crm-user-row.is-disabled {
+  opacity: 0.62;
+}
+
+.crm-user-info strong,
+.crm-user-info span,
+.audit-info strong,
+.audit-info span {
+  display: block;
+}
+
+.crm-user-info strong,
+.audit-info strong {
+  font-size: 13px;
+}
+
+.crm-user-info span,
+.audit-info span,
+.audit-row time {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.crm-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crm-user-actions select {
+  width: auto;
+  min-width: 145px;
+  min-height: 36px;
+}
+
+.audit-row time {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.card-quick-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+@media (max-width: 760px) {
+  .crm-user-form {
+    grid-template-columns: 1fr;
+  }
+
+  .crm-user-row,
+  .audit-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .crm-user-actions {
+    width: 100%;
+  }
+
+  .crm-user-actions select,
+  .crm-user-actions .button {
+    flex: 1;
+  }
+}

@@ -5,3 +5,8 @@ src-backup-kanban-original/
 
 src-backup-crm-v1-validada/
 src-backup-crm-v1.1-validada/
+
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

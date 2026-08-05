@@ -14,34 +14,33 @@
         <p class="eyebrow">CHATWOOT CONNECTED CRM</p>
         <h1>Entre no seu Kanban CRM</h1>
         <p class="muted">
-          O token é mantido em uma sessão segura no servidor e não fica salvo no navegador.
+          Acesso centralizado por usuário. A conexão com o Chatwoot fica protegida no servidor.
         </p>
 
         <label>
-          Token de acesso pessoal
+          E-mail
           <input
-            id="login-token"
-            type="password"
-            autocomplete="off"
-            placeholder="Cole o token do Chatwoot"
+            id="login-email"
+            type="email"
+            autocomplete="username"
+            placeholder="seuemail@empresa.com.br"
             required
           />
         </label>
 
         <label>
-          ID da conta
+          Senha
           <input
-            id="login-account"
-            type="number"
-            min="1"
-            step="1"
-            placeholder="Ex.: 1"
+            id="login-password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Digite sua senha"
             required
           />
         </label>
 
         <button id="login-submit" class="button button-primary" type="submit">
-          Conectar ao Chatwoot
+          Entrar no CRM
         </button>
         <p id="login-error" class="form-error" role="alert"></p>
       </form>
@@ -92,7 +91,8 @@
         <div class="sidebar-account">
           <span class="status-dot"></span>
           <div>
-            <strong>Chatwoot conectado</strong>
+            <strong id="sidebar-user-name">Usuário conectado</strong>
+            <span id="sidebar-user-role">Perfil —</span>
             <span id="sidebar-account-id">Conta —</span>
           </div>
         </div>
@@ -300,7 +300,7 @@
                 <div id="bootstrap-result" class="result-box"></div>
               </article>
 
-              <article class="panel pipeline-settings-panel">
+              <article id="pipeline-settings-panel" class="panel pipeline-settings-panel">
                 <div class="panel-header">
                   <div>
                     <p class="eyebrow">PIPELINE</p>
@@ -318,6 +318,45 @@
                 </form>
               </article>
 
+              <article id="user-management-panel" class="panel is-hidden">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">EQUIPE</p>
+                    <h2>Usuários e permissões</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Crie acessos próprios para administradores, gerentes, atendentes e usuários somente leitura.
+                </p>
+                <form id="crm-user-form" class="crm-user-form">
+                  <input id="crm-user-name" type="text" maxlength="80" placeholder="Nome do usuário" required />
+                  <input id="crm-user-email" type="email" placeholder="E-mail" required />
+                  <input id="crm-user-password" type="password" minlength="10" placeholder="Senha inicial (mín. 10)" required />
+                  <select id="crm-user-role">
+                    <option value="agent">Atendente</option>
+                    <option value="manager">Gerente</option>
+                    <option value="viewer">Somente leitura</option>
+                    <option value="admin">Administrador</option>
+                  </select>
+                  <button id="crm-user-submit" class="button button-primary" type="submit">Criar usuário</button>
+                </form>
+                <div id="crm-users-list" class="crm-users-list"></div>
+              </article>
+
+              <article id="audit-panel" class="panel is-hidden">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">AUDITORIA</p>
+                    <h2>Atividade recente</h2>
+                  </div>
+                  <button id="refresh-administration" class="text-button" type="button">Atualizar</button>
+                </div>
+                <p class="muted">
+                  Registro central de acessos, alterações no pipeline, usuários, filtros e oportunidades.
+                </p>
+                <div id="audit-list" class="audit-list"></div>
+              </article>
+
               <article class="panel">
                 <div class="panel-header">
                   <div>
@@ -326,9 +365,12 @@
                   </div>
                 </div>
                 <dl class="definition-list">
+                  <div><dt>Organização</dt><dd id="settings-organization-name">—</dd></div>
+                  <div><dt>Usuário</dt><dd id="settings-current-user">—</dd></div>
                   <div><dt>Conta Chatwoot</dt><dd id="settings-account-id">—</dd></div>
                   <div><dt>Sincronização</dt><dd>Automática a cada 60s + manual</dd></div>
-                  <div><dt>Token no navegador</dt><dd>Não armazenado</dd></div>
+                  <div><dt>Credencial Chatwoot</dt><dd>Criptografada no servidor</dd></div>
+                  <div><dt>Configurações</dt><dd>Compartilhadas no banco central</dd></div>
                 </dl>
                 <button id="logout-button" class="button button-danger">Sair da conta</button>
               </article>

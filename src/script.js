@@ -9,15 +9,21 @@ const DEFAULT_PIPELINE_STAGES = [
 ];
 
 const STORAGE_KEYS = {
-  pipelineStages: "chatwoot_crm_pipeline_stages_v12",
-  filterPresets: "chatwoot_crm_filter_presets_v12",
-  activePreset: "chatwoot_crm_active_filter_preset_v12",
+  activePreset: "chatwoot_crm_active_filter_preset_v13",
+  legacyStages: "chatwoot_crm_pipeline_stages_v12",
+  legacyFilters: "chatwoot_crm_filter_presets_v12",
+  legacyMigrationDone: "chatwoot_crm_v13_legacy_migration_done",
 };
 
 const PAGE_SIZE = 25;
 
 const state = {
   accountId: null,
+  organization: null,
+  user: null,
+  permissions: [],
+  users: [],
+  audit: [],
   conversations: [],
   agents: [],
   teams: [],
@@ -107,16 +113,32 @@ function normalizePipelineStages(stages) {
 }
 
 function loadLocalConfiguration() {
-  state.pipelineStages = normalizePipelineStages(
-    loadJsonStorage(STORAGE_KEYS.pipelineStages, cloneDefaultStages())
-  );
-  const presets = loadJsonStorage(STORAGE_KEYS.filterPresets, []);
-  state.filterPresets = Array.isArray(presets) ? presets : [];
+  state.pipelineStages = cloneDefaultStages();
+  state.filterPresets = [];
   state.activeFilterPresetId = window.localStorage.getItem(STORAGE_KEYS.activePreset) || "";
 }
 
-function savePipelineStages() {
-  window.localStorage.setItem(STORAGE_KEYS.pipelineStages, JSON.stringify(state.pipelineStages));
+function hasPermission(permission) {
+  return state.permissions.includes(permission);
+}
+
+function applySessionPayload(payload) {
+  state.accountId = Number(payload.accountId);
+  state.organization = payload.organization || null;
+  state.user = payload.user || null;
+  state.permissions = Array.isArray(payload.permissions) ? payload.permissions : [];
+}
+
+async function savePipelineStages(options = {}) {
+  const response = await apiRequest("/api/crm/stages/save", {
+    method: "POST",
+    body: JSON.stringify({ stages: state.pipelineStages }),
+  });
+  state.pipelineStages = normalizePipelineStages(response.stages || state.pipelineStages);
+  if (!response.stageSync?.ok && !options.silent) {
+    showToast("Etapas centralizadas, mas a sincronização com o Chatwoot precisa ser revisada.", "error");
+  }
+  return response;
 }
 
 function getAllPipelineStages() {
@@ -347,13 +369,111 @@ async function apiRequest(url, options = {}) {
   return body;
 }
 
+async function maybeMigrateLegacyConfiguration() {
+  if (window.localStorage.getItem(STORAGE_KEYS.legacyMigrationDone) === "1") return;
+  const legacyStages = loadJsonStorage(STORAGE_KEYS.legacyStages, null);
+  const legacyFilters = loadJsonStorage(STORAGE_KEYS.legacyFilters, []);
+  const hasStages = Array.isArray(legacyStages) && legacyStages.length >= 3;
+  const hasFilters = Array.isArray(legacyFilters) && legacyFilters.length > 0;
+  if (!hasStages && !hasFilters) {
+    window.localStorage.setItem(STORAGE_KEYS.legacyMigrationDone, "1");
+    return;
+  }
+  const canMigrateStages = hasStages && hasPermission("pipeline:manage");
+  const confirmed = window.confirm(
+    "Encontramos configurações da V1.2 neste navegador. Deseja migrar etapas e filtros para a base central da equipe?"
+  );
+  if (!confirmed) {
+    window.localStorage.setItem(STORAGE_KEYS.legacyMigrationDone, "1");
+    return;
+  }
+  try {
+    if (canMigrateStages) {
+      state.pipelineStages = normalizePipelineStages(legacyStages);
+      await savePipelineStages({ silent: true });
+    }
+    for (const legacy of legacyFilters) {
+      const name = String(legacy?.name || "Filtro migrado").trim().slice(0, 60);
+      const snapshot = {
+        search: String(legacy?.search || ""),
+        filters: legacy?.filters && typeof legacy.filters === "object" ? legacy.filters : {},
+      };
+      try {
+        const result = await apiRequest("/api/crm/filters", {
+          method: "POST",
+          body: JSON.stringify({ name, scope: "personal", snapshot }),
+        });
+        state.filterPresets.push(result.preset);
+      } catch (error) {
+        console.warn(`Filtro legado não migrado (${name}):`, error.message);
+      }
+    }
+    window.localStorage.setItem(STORAGE_KEYS.legacyMigrationDone, "1");
+    showToast("Configurações da V1.2 migradas para a base central.", "success");
+  } catch (error) {
+    showToast(`Não foi possível concluir a migração: ${error.message}`, "error");
+  }
+}
+
+async function loadCentralConfiguration(options = {}) {
+  const config = await apiRequest("/api/crm/config");
+  applySessionPayload(config);
+  state.pipelineStages = normalizePipelineStages(config.pipeline?.stages || cloneDefaultStages());
+  state.filterPresets = Array.isArray(config.filterPresets) ? config.filterPresets : [];
+  if (!options.skipLegacyMigration) await maybeMigrateLegacyConfiguration();
+  if (!state.filterPresets.some((item) => item.id === state.activeFilterPresetId)) {
+    state.activeFilterPresetId = "";
+    window.localStorage.removeItem(STORAGE_KEYS.activePreset);
+  }
+  if (!options.skipRender) {
+    renderFilterPresets();
+    renderStageManager();
+    populateDrawerOptions();
+    renderIdentity();
+  }
+  if (hasPermission("users:manage") || hasPermission("audit:read")) {
+    await loadAdministrationData({ silent: true });
+  }
+  return config;
+}
+
+function renderIdentity() {
+  if (!state.user || !state.organization) return;
+  elements.sidebarAccountId.textContent = `${state.organization.name} · Conta ${state.accountId}`;
+  elements.settingsAccountId.textContent = String(state.accountId);
+  if (elements.settingsOrganizationName) elements.settingsOrganizationName.textContent = state.organization.name;
+  if (elements.settingsCurrentUser) {
+    elements.settingsCurrentUser.textContent = `${state.user.name} · ${roleLabel(state.user.role)}`;
+  }
+  if (elements.sidebarUserName) elements.sidebarUserName.textContent = state.user.name;
+  if (elements.sidebarUserRole) elements.sidebarUserRole.textContent = roleLabel(state.user.role);
+  elements.pipelineSettingsPanel?.classList.toggle("is-readonly", !hasPermission("pipeline:manage"));
+  elements.userManagementPanel?.classList.toggle("is-hidden", !hasPermission("users:manage"));
+  elements.auditPanel?.classList.toggle("is-hidden", !hasPermission("audit:read"));
+  elements.bootstrapCrm.disabled = !hasPermission("pipeline:manage");
+  elements.managePipeline.disabled = !hasPermission("pipeline:manage");
+  elements.saveOpportunity.disabled = !hasPermission("opportunities:write");
+  elements.replySubmit.disabled = !hasPermission("messages:send");
+}
+
+function roleLabel(role) {
+  return {
+    admin: "Administrador",
+    manager: "Gerente",
+    agent: "Atendente",
+    viewer: "Somente leitura",
+  }[role] || role || "Usuário";
+}
+
 async function initializeSession() {
   try {
     const session = await apiRequest("/api/session");
     if (session.connected) {
-      state.accountId = Number(session.accountId);
+      applySessionPayload(session);
       showApplication();
-      await loadWorkspace();
+      await loadCentralConfiguration({ skipRender: true });
+      renderIdentity();
+      await loadWorkspace({ skipCentralReload: true });
       return;
     }
   } catch (error) {
@@ -370,32 +490,33 @@ function showLogin() {
 function showApplication() {
   elements.loginScreen.classList.add("is-hidden");
   elements.app.classList.remove("is-hidden");
-  elements.sidebarAccountId.textContent = `Conta ${state.accountId}`;
-  elements.settingsAccountId.textContent = String(state.accountId);
+  renderIdentity();
 }
 
 async function handleLogin(event) {
   event.preventDefault();
   elements.loginError.textContent = "";
   elements.loginSubmit.disabled = true;
-  elements.loginSubmit.textContent = "Conectando...";
+  elements.loginSubmit.textContent = "Entrando...";
 
   try {
-    const token = elements.loginToken.value.trim();
-    const accountId = Number(elements.loginAccount.value);
+    const email = elements.loginEmail.value.trim();
+    const password = elements.loginPassword.value;
     const response = await apiRequest("/api/session", {
       method: "POST",
-      body: JSON.stringify({ token, accountId }),
+      body: JSON.stringify({ email, password }),
     });
-    state.accountId = Number(response.accountId);
-    elements.loginToken.value = "";
+    applySessionPayload(response);
+    elements.loginPassword.value = "";
     showApplication();
-    await loadWorkspace();
+    await loadCentralConfiguration({ skipRender: true });
+    renderIdentity();
+    await loadWorkspace({ skipCentralReload: true });
   } catch (error) {
     elements.loginError.textContent = error.message;
   } finally {
     elements.loginSubmit.disabled = false;
-    elements.loginSubmit.textContent = "Conectar ao Chatwoot";
+    elements.loginSubmit.textContent = "Entrar no CRM";
   }
 }
 
@@ -404,6 +525,9 @@ async function logout() {
     await apiRequest("/api/session", { method: "DELETE" });
   } finally {
     state.accountId = null;
+    state.organization = null;
+    state.user = null;
+    state.permissions = [];
     state.conversations = [];
     showLogin();
   }
@@ -440,6 +564,10 @@ async function loadWorkspace(options = {}) {
   if (!background) setLoading(true, "Sincronizando conversas e equipe...");
   elements.refreshButton?.classList.add("is-spinning");
   try {
+    if (!options.skipCentralReload) {
+      await loadCentralConfiguration({ skipRender: true });
+      renderIdentity();
+    }
     const [conversations, agents, teams, inboxData, labelsData] = await Promise.all([
       fetchAllConversations(),
       apiRequest(`/api/v1/accounts/${state.accountId}/agents`).catch(() => []),
@@ -729,18 +857,20 @@ function renderPipeline() {
       list.appendChild(createElement("div", "pipeline-empty", "Arraste uma oportunidade para esta etapa"));
     }
 
-    column.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      column.classList.add("is-drag-over");
-    });
-    column.addEventListener("dragleave", () => column.classList.remove("is-drag-over"));
-    column.addEventListener("drop", async (event) => {
-      event.preventDefault();
-      column.classList.remove("is-drag-over");
-      const conversationId = Number(state.draggingConversationId);
-      if (!conversationId) return;
-      await requestStageTransition(conversationId, stage.id);
-    });
+    if (hasPermission("opportunities:write")) {
+      column.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        column.classList.add("is-drag-over");
+      });
+      column.addEventListener("dragleave", () => column.classList.remove("is-drag-over"));
+      column.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        column.classList.remove("is-drag-over");
+        const conversationId = Number(state.draggingConversationId);
+        if (!conversationId) return;
+        await requestStageTransition(conversationId, stage.id);
+      });
+    }
 
     column.append(header, list);
     elements.pipelineBoard.appendChild(column);
@@ -756,7 +886,7 @@ function createOpportunityCard(conversation) {
   const labels = getLabels(conversation);
   const taskStatus = getTaskStatus(conversation);
   const card = createElement("article", `opportunity-card ${idleClass(conversation)}`);
-  card.draggable = true;
+  card.draggable = hasPermission("opportunities:write");
   card.dataset.id = String(conversation.id);
   card.title = `Conversa #${conversation.id} · ${formatDate(
     conversationActivityTimestamp(conversation)
@@ -845,6 +975,7 @@ function createOpportunityCard(conversation) {
     button.draggable = false;
     button.title = titleText;
     button.dataset.quickAction = action;
+    if (action !== "chatwoot" && !hasPermission("opportunities:write")) button.disabled = true;
     button.addEventListener("mousedown", (event) => event.stopPropagation());
     button.addEventListener("click", async (event) => {
       event.preventDefault();
@@ -873,6 +1004,10 @@ function createOpportunityCard(conversation) {
 }
 
 async function requestStageTransition(conversationId, stageId) {
+  if (!hasPermission("opportunities:write")) {
+    showToast("Seu perfil possui acesso somente para leitura.", "error");
+    return;
+  }
   const conversation = state.conversations.find((item) => Number(item.id) === Number(conversationId));
   if (!conversation || getConversationStage(conversation) === stageId) return;
 
@@ -1102,6 +1237,7 @@ function renderTasks() {
       done ? "Reabrir" : "Concluir"
     );
     toggle.type = "button";
+    toggle.disabled = !hasPermission("opportunities:write");
     toggle.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleTaskCompletion(conversation.id, !done);
@@ -1250,6 +1386,24 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   elements.drawerTaskDone.checked = isTrue(attributes.crm_task_done);
   elements.drawerTaskCompletedAt.dataset.value = attributes.crm_task_completed_at || "";
   elements.drawerLossReason.value = attributes.crm_loss_reason || "";
+  const canWrite = hasPermission("opportunities:write");
+  [
+    elements.drawerStage,
+    elements.drawerValue,
+    elements.drawerPriority,
+    elements.drawerAssignee,
+    elements.drawerTeam,
+    elements.drawerTask,
+    elements.drawerDueDate,
+    elements.drawerTaskDone,
+    elements.drawerLossReason,
+  ].forEach((element) => {
+    element.disabled = !canWrite;
+  });
+  elements.saveOpportunity.disabled = !canWrite;
+  elements.replyContent.disabled = !hasPermission("messages:send");
+  elements.replyPrivate.disabled = !hasPermission("messages:send");
+  elements.replySubmit.disabled = !hasPermission("messages:send");
   toggleLossReason();
   updateDrawerTaskState();
 
@@ -1359,6 +1513,10 @@ function attachmentDescription(message) {
 }
 
 async function saveOpportunity() {
+  if (!hasPermission("opportunities:write")) {
+    showToast("Seu perfil possui acesso somente para leitura.", "error");
+    return;
+  }
   const conversationId = state.currentConversationId;
   const conversation = state.conversations.find((item) => Number(item.id) === conversationId);
   if (!conversation) return;
@@ -1451,17 +1609,18 @@ async function saveOpportunity() {
 }
 
 async function updateCustomAttributes(conversationId, customAttributes) {
-  return apiRequest(
-    `/api/v1/accounts/${state.accountId}/conversations/${conversationId}/custom_attributes`,
-    {
-      method: "POST",
-      body: JSON.stringify({ custom_attributes: customAttributes }),
-    }
-  );
+  return apiRequest(`/api/crm/opportunities/${conversationId}/custom-attributes`, {
+    method: "POST",
+    body: JSON.stringify({ custom_attributes: customAttributes }),
+  });
 }
 
 async function sendReply(event) {
   event.preventDefault();
+  if (!hasPermission("messages:send")) {
+    showToast("Seu perfil não pode enviar mensagens.", "error");
+    return;
+  }
   const conversationId = state.currentConversationId;
   const content = elements.replyContent.value.trim();
   if (!conversationId || !content) return;
@@ -1559,7 +1718,6 @@ function currentFilterSnapshot() {
 }
 
 function persistFilterPresets() {
-  window.localStorage.setItem(STORAGE_KEYS.filterPresets, JSON.stringify(state.filterPresets));
   if (state.activeFilterPresetId) {
     window.localStorage.setItem(STORAGE_KEYS.activePreset, state.activeFilterPresetId);
   } else {
@@ -1596,22 +1754,42 @@ function renderFilterPresets() {
   for (const preset of state.filterPresets) {
     const option = document.createElement("option");
     option.value = preset.id;
-    option.textContent = preset.name;
+    option.textContent = `${preset.scope === "shared" ? "Equipe · " : "Meu · "}${preset.name}`;
     elements.filterPreset.appendChild(option);
   }
   elements.filterPreset.value = state.activeFilterPresetId;
-  elements.deleteFilterPreset.disabled = !state.activeFilterPresetId;
+  const active = state.filterPresets.find((item) => item.id === state.activeFilterPresetId);
+  const canDelete = Boolean(
+    active &&
+      (active.ownerUserId === state.user?.id ||
+        (active.scope === "shared" && hasPermission("filters:share")))
+  );
+  elements.deleteFilterPreset.disabled = !canDelete;
 }
 
-function saveCurrentFilterPreset() {
+async function saveCurrentFilterPreset() {
   const name = window.prompt("Nome para este conjunto de filtros:");
   if (!name || !name.trim()) return;
-  const id = `preset_${Date.now()}`;
-  state.filterPresets.push({ id, name: name.trim().slice(0, 60), ...currentFilterSnapshot() });
-  state.activeFilterPresetId = id;
-  persistFilterPresets();
-  renderFilterPresets();
-  showToast("Filtro salvo.", "success");
+  const scope = hasPermission("filters:share") && window.confirm("Compartilhar este filtro com toda a equipe?")
+    ? "shared"
+    : "personal";
+  try {
+    const result = await apiRequest("/api/crm/filters", {
+      method: "POST",
+      body: JSON.stringify({
+        name: name.trim().slice(0, 60),
+        scope,
+        snapshot: currentFilterSnapshot(),
+      }),
+    });
+    state.filterPresets.push(result.preset);
+    state.activeFilterPresetId = result.preset.id;
+    persistFilterPresets();
+    renderFilterPresets();
+    showToast(scope === "shared" ? "Filtro compartilhado com a equipe." : "Filtro pessoal salvo.", "success");
+  } catch (error) {
+    showToast(`Não foi possível salvar o filtro: ${error.message}`, "error");
+  }
 }
 
 function applyFilterPreset(presetId) {
@@ -1636,19 +1814,25 @@ function applyFilterPreset(presetId) {
   renderAll();
 }
 
-function deleteActiveFilterPreset() {
+async function deleteActiveFilterPreset() {
   if (!state.activeFilterPresetId) return;
   const preset = state.filterPresets.find((item) => item.id === state.activeFilterPresetId);
   if (!preset || !window.confirm(`Excluir o filtro salvo “${preset.name}”?`)) return;
-  state.filterPresets = state.filterPresets.filter((item) => item.id !== state.activeFilterPresetId);
-  state.activeFilterPresetId = "";
-  persistFilterPresets();
-  renderFilterPresets();
-  showToast("Filtro excluído.", "success");
+  try {
+    await apiRequest(`/api/crm/filters/${preset.id}`, { method: "DELETE" });
+    state.filterPresets = state.filterPresets.filter((item) => item.id !== preset.id);
+    state.activeFilterPresetId = "";
+    persistFilterPresets();
+    renderFilterPresets();
+    showToast("Filtro excluído.", "success");
+  } catch (error) {
+    showToast(`Não foi possível excluir o filtro: ${error.message}`, "error");
+  }
 }
 
 function renderStageManager() {
   if (!elements.stageManagerList) return;
+  const canManage = hasPermission("pipeline:manage");
   elements.stageManagerList.replaceChildren();
   for (const [index, stage] of getAllPipelineStages().entries()) {
     const row = createElement("div", `stage-manager-row ${stage.archived ? "is-archived" : ""}`);
@@ -1656,22 +1840,43 @@ function renderStageManager() {
     color.type = "color";
     color.value = stage.color;
     color.title = "Cor da etapa";
-    color.addEventListener("change", () => {
+    color.disabled = !canManage;
+    color.addEventListener("change", async () => {
+      const previous = stage.color;
       stage.color = color.value;
-      savePipelineStages();
-      renderAll();
+      try {
+        await savePipelineStages({ silent: false });
+        renderAll();
+        showToast("Cor da etapa atualizada para toda a equipe.", "success");
+      } catch (error) {
+        stage.color = previous;
+        color.value = previous;
+        showToast(`Não foi possível atualizar a etapa: ${error.message}`, "error");
+      }
     });
     const name = document.createElement("input");
     name.type = "text";
     name.value = stage.label;
     name.maxLength = 60;
-    name.addEventListener("change", () => {
+    name.disabled = !canManage;
+    name.addEventListener("change", async () => {
       const next = name.value.trim();
-      if (!next) return;
+      if (!next) {
+        name.value = stage.label;
+        return;
+      }
+      const previous = stage.label;
       stage.label = next;
-      savePipelineStages();
-      populateDrawerOptions();
-      renderAll();
+      try {
+        await savePipelineStages({ silent: false });
+        populateDrawerOptions();
+        renderAll();
+        showToast("Nome da etapa atualizado para toda a equipe.", "success");
+      } catch (error) {
+        stage.label = previous;
+        name.value = previous;
+        showToast(`Não foi possível atualizar a etapa: ${error.message}`, "error");
+      }
     });
     const code = createElement("code", null, stage.id);
     const controls = createElement("div", "stage-manager-actions");
@@ -1680,10 +1885,10 @@ function renderStageManager() {
     const archive = createElement("button", "button button-ghost button-small", stage.archived ? "Reativar" : "Arquivar");
     const remove = createElement("button", "button button-danger button-small", "Excluir");
     up.type = down.type = archive.type = remove.type = "button";
-    up.disabled = index === 0;
-    down.disabled = index === getAllPipelineStages().length - 1;
-    remove.disabled = stage.locked;
-    archive.disabled = stage.locked;
+    up.disabled = !canManage || index === 0;
+    down.disabled = !canManage || index === getAllPipelineStages().length - 1;
+    remove.disabled = !canManage || stage.locked;
+    archive.disabled = !canManage || stage.locked;
     up.addEventListener("click", () => reorderStage(index, index - 1));
     down.addEventListener("click", () => reorderStage(index, index + 1));
     archive.addEventListener("click", () => toggleStageArchive(stage.id));
@@ -1694,23 +1899,37 @@ function renderStageManager() {
     row.append(color, info, controls);
     elements.stageManagerList.appendChild(row);
   }
+  if (elements.stageManagerForm) {
+    elements.stageManagerForm.querySelectorAll("input, button").forEach((element) => {
+      element.disabled = !canManage;
+    });
+  }
 }
 
-function reorderStage(fromIndex, toIndex) {
+async function reorderStage(fromIndex, toIndex) {
+  if (!hasPermission("pipeline:manage")) return;
   if (toIndex < 0 || toIndex >= state.pipelineStages.length) return;
+  const previous = state.pipelineStages.map((stage) => ({ ...stage }));
   const [stage] = state.pipelineStages.splice(fromIndex, 1);
   state.pipelineStages.splice(toIndex, 0, stage);
-  savePipelineStages();
-  renderStageManager();
-  populateDrawerOptions();
-  renderAll();
+  try {
+    await savePipelineStages();
+    renderStageManager();
+    populateDrawerOptions();
+    renderAll();
+  } catch (error) {
+    state.pipelineStages = previous;
+    renderStageManager();
+    showToast(`Não foi possível reordenar: ${error.message}`, "error");
+  }
 }
 
 function stageOpportunityCount(stageId) {
   return state.conversations.filter((conversation) => getConversationStage(conversation) === stageId).length;
 }
 
-function toggleStageArchive(stageId) {
+async function toggleStageArchive(stageId) {
+  if (!hasPermission("pipeline:manage")) return;
   const stage = getStage(stageId);
   if (stage.locked) return;
   if (!stage.archived && stageOpportunityCount(stageId) > 0) {
@@ -1718,30 +1937,46 @@ function toggleStageArchive(stageId) {
     return;
   }
   stage.archived = !stage.archived;
-  savePipelineStages();
-  renderStageManager();
-  populateDrawerOptions();
-  renderAll();
+  try {
+    await savePipelineStages();
+    renderStageManager();
+    populateDrawerOptions();
+    renderAll();
+    showToast(stage.archived ? "Etapa arquivada para toda a equipe." : "Etapa reativada.", "success");
+  } catch (error) {
+    stage.archived = !stage.archived;
+    renderStageManager();
+    showToast(`Não foi possível atualizar a etapa: ${error.message}`, "error");
+  }
 }
 
-function deleteStage(stageId) {
+async function deleteStage(stageId) {
+  if (!hasPermission("pipeline:manage")) return;
   const stage = getStage(stageId);
   if (stage.locked) return;
   if (stageOpportunityCount(stageId) > 0) {
     showToast("Não é possível excluir uma etapa que contém oportunidades.", "error");
     return;
   }
-  if (!window.confirm(`Excluir a etapa “${stage.label}”?`)) return;
+  if (!window.confirm(`Excluir a etapa “${stage.label}” para todos os usuários?`)) return;
+  const previous = state.pipelineStages.map((item) => ({ ...item }));
   state.pipelineStages = state.pipelineStages.filter((item) => item.id !== stageId);
-  savePipelineStages();
-  renderStageManager();
-  populateDrawerOptions();
-  syncStageValues();
-  renderAll();
+  try {
+    await savePipelineStages();
+    renderStageManager();
+    populateDrawerOptions();
+    renderAll();
+    showToast("Etapa excluída da configuração central.", "success");
+  } catch (error) {
+    state.pipelineStages = previous;
+    renderStageManager();
+    showToast(`Não foi possível excluir a etapa: ${error.message}`, "error");
+  }
 }
 
 async function addPipelineStage(event) {
   event.preventDefault();
+  if (!hasPermission("pipeline:manage")) return;
   const label = elements.newStageName.value.trim();
   const color = elements.newStageColor.value;
   let id = slugifyStage(label);
@@ -1749,29 +1984,199 @@ async function addPipelineStage(event) {
   if (getAllPipelineStages().some((stage) => stage.id === id)) {
     id = `${id}_${Date.now().toString().slice(-5)}`;
   }
+  const previous = state.pipelineStages.map((item) => ({ ...item }));
   state.pipelineStages.push({ id, label: label.slice(0, 60), color, archived: false });
-  savePipelineStages();
-  elements.newStageName.value = "";
-  renderStageManager();
-  populateDrawerOptions();
-  const synced = await syncStageValues();
-  renderAll();
-  if (synced) showToast("Etapa criada e sincronizada.", "success");
+  try {
+    const response = await savePipelineStages();
+    elements.newStageName.value = "";
+    renderStageManager();
+    populateDrawerOptions();
+    renderAll();
+    showToast(
+      response.stageSync?.ok
+        ? "Etapa criada e compartilhada com a equipe."
+        : "Etapa criada no CRM; revise a sincronização com o Chatwoot.",
+      response.stageSync?.ok ? "success" : "error"
+    );
+  } catch (error) {
+    state.pipelineStages = previous;
+    renderStageManager();
+    showToast(`Não foi possível criar a etapa: ${error.message}`, "error");
+  }
 }
 
 async function syncStageValues(options = {}) {
   try {
-    await apiRequest("/api/crm/stages/sync", {
-      method: "POST",
-      body: JSON.stringify({ values: getAllPipelineStages().map((stage) => stage.id) }),
-    });
-    return true;
+    const result = await apiRequest("/api/crm/stages/sync", { method: "POST" });
+    return Boolean(result.ok ?? true);
   } catch (error) {
     console.warn("Não foi possível sincronizar valores de crm_stage:", error.message);
-    if (!options.silent) {
-      showToast(`Etapa salva localmente, mas não sincronizada no Chatwoot: ${error.message}`, "error");
-    }
+    if (!options.silent) showToast(`Falha ao sincronizar etapas: ${error.message}`, "error");
     return false;
+  }
+}
+
+async function loadAdministrationData(options = {}) {
+  const requests = [];
+  if (hasPermission("users:manage")) {
+    requests.push(
+      apiRequest("/api/crm/users")
+        .then((result) => {
+          state.users = Array.isArray(result.users) ? result.users : [];
+          renderUsers();
+        })
+        .catch((error) => {
+          if (!options.silent) showToast(`Falha ao carregar usuários: ${error.message}`, "error");
+        })
+    );
+  }
+  if (hasPermission("audit:read")) {
+    requests.push(
+      apiRequest("/api/crm/audit?limit=60")
+        .then((result) => {
+          state.audit = Array.isArray(result.audit) ? result.audit : [];
+          renderAudit();
+        })
+        .catch((error) => {
+          if (!options.silent) showToast(`Falha ao carregar auditoria: ${error.message}`, "error");
+        })
+    );
+  }
+  await Promise.all(requests);
+}
+
+function renderUsers() {
+  if (!elements.crmUsersList) return;
+  elements.crmUsersList.replaceChildren();
+  if (!state.users.length) {
+    elements.crmUsersList.appendChild(createElement("div", "empty-state", "Nenhum usuário cadastrado."));
+    return;
+  }
+  for (const user of state.users) {
+    const row = createElement("div", `crm-user-row ${user.active ? "" : "is-disabled"}`);
+    const info = createElement("div", "crm-user-info");
+    info.append(
+      createElement("strong", null, user.name),
+      createElement("span", null, `${user.email} · ${roleLabel(user.role)}`)
+    );
+    const controls = createElement("div", "crm-user-actions");
+    const role = document.createElement("select");
+    for (const value of ["admin", "manager", "agent", "viewer"]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = roleLabel(value);
+      role.appendChild(option);
+    }
+    role.value = user.role;
+    role.disabled = user.id === state.user?.id;
+    role.addEventListener("change", async () => {
+      await updateCrmUser(user.id, { role: role.value });
+    });
+    const resetPassword = createElement("button", "button button-ghost button-small", "Nova senha");
+    resetPassword.type = "button";
+    resetPassword.addEventListener("click", async () => {
+      const password = window.prompt(`Nova senha para ${user.name} (mínimo 10 caracteres):`);
+      if (!password) return;
+      await updateCrmUser(user.id, { password });
+    });
+    const active = createElement(
+      "button",
+      `button button-small ${user.active ? "button-ghost" : "button-primary"}`,
+      user.active ? "Desativar" : "Ativar"
+    );
+    active.type = "button";
+    active.disabled = user.id === state.user?.id;
+    active.addEventListener("click", () => updateCrmUser(user.id, { active: !user.active }));
+    controls.append(role, resetPassword, active);
+    row.append(info, controls);
+    elements.crmUsersList.appendChild(row);
+  }
+}
+
+async function handleCrmUserCreate(event) {
+  event.preventDefault();
+  if (!hasPermission("users:manage")) return;
+  const payload = {
+    name: elements.crmUserName.value.trim(),
+    email: elements.crmUserEmail.value.trim(),
+    password: elements.crmUserPassword.value,
+    role: elements.crmUserRole.value,
+  };
+  elements.crmUserSubmit.disabled = true;
+  try {
+    const result = await apiRequest("/api/crm/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    state.users.push(result.user);
+    state.users.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    elements.crmUserForm.reset();
+    elements.crmUserRole.value = "agent";
+    renderUsers();
+    await loadAdministrationData({ silent: true });
+    showToast("Usuário criado com acesso centralizado.", "success");
+  } catch (error) {
+    showToast(`Não foi possível criar o usuário: ${error.message}`, "error");
+  } finally {
+    elements.crmUserSubmit.disabled = false;
+  }
+}
+
+async function updateCrmUser(userId, changes) {
+  try {
+    const result = await apiRequest(`/api/crm/users/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+    const index = state.users.findIndex((item) => item.id === userId);
+    if (index >= 0) state.users[index] = result.user;
+    renderUsers();
+    await loadAdministrationData({ silent: true });
+    showToast("Acesso do usuário atualizado.", "success");
+  } catch (error) {
+    showToast(`Não foi possível atualizar o usuário: ${error.message}`, "error");
+    await loadAdministrationData({ silent: true });
+  }
+}
+
+function auditActionLabel(action) {
+  return {
+    "session.login": "Entrou no CRM",
+    "session.logout": "Saiu do CRM",
+    "organization.bootstrap": "Inicializou a organização",
+    "crm.bootstrap": "Configurou atributos do CRM",
+    "pipeline.stages.updated": "Atualizou etapas do pipeline",
+    "filter.created": "Criou um filtro",
+    "filter.deleted": "Excluiu um filtro",
+    "user.created": "Criou um usuário",
+    "user.updated": "Atualizou um usuário",
+    "opportunity.updated": "Atualizou uma oportunidade",
+    "chatwoot.message.created": "Enviou mensagem ou nota",
+    "chatwoot.post": "Executou alteração no Chatwoot",
+    "chatwoot.patch": "Atualizou dados no Chatwoot",
+  }[action] || action;
+}
+
+function renderAudit() {
+  if (!elements.auditList) return;
+  elements.auditList.replaceChildren();
+  if (!state.audit.length) {
+    elements.auditList.appendChild(createElement("div", "empty-state", "Nenhuma atividade registrada."));
+    return;
+  }
+  for (const entry of state.audit) {
+    const row = createElement("div", "audit-row");
+    const info = createElement("div", "audit-info");
+    info.append(
+      createElement("strong", null, auditActionLabel(entry.action)),
+      createElement(
+        "span",
+        null,
+        `${entry.actorName || "Sistema"}${entry.entityId ? ` · #${entry.entityId}` : ""}`
+      )
+    );
+    row.append(info, createElement("time", null, formatDate(entry.createdAt)));
+    elements.auditList.appendChild(row);
   }
 }
 
@@ -1849,13 +2254,17 @@ function cacheElements() {
   Object.assign(elements, {
     loginScreen: byId("login-screen"),
     loginForm: byId("login-form"),
-    loginToken: byId("login-token"),
-    loginAccount: byId("login-account"),
+    loginEmail: byId("login-email"),
+    loginPassword: byId("login-password"),
     loginSubmit: byId("login-submit"),
     loginError: byId("login-error"),
     app: byId("app"),
     sidebarAccountId: byId("sidebar-account-id"),
+    sidebarUserName: byId("sidebar-user-name"),
+    sidebarUserRole: byId("sidebar-user-role"),
     settingsAccountId: byId("settings-account-id"),
+    settingsOrganizationName: byId("settings-organization-name"),
+    settingsCurrentUser: byId("settings-current-user"),
     pageEyebrow: byId("page-eyebrow"),
     pageTitle: byId("page-title"),
     globalSearch: byId("global-search"),
@@ -1888,10 +2297,22 @@ function cacheElements() {
     contactsTable: byId("contacts-table"),
     bootstrapCrm: byId("bootstrap-crm"),
     bootstrapResult: byId("bootstrap-result"),
+    pipelineSettingsPanel: byId("pipeline-settings-panel"),
     stageManagerList: byId("stage-manager-list"),
     stageManagerForm: byId("stage-manager-form"),
     newStageName: byId("new-stage-name"),
     newStageColor: byId("new-stage-color"),
+    userManagementPanel: byId("user-management-panel"),
+    crmUserForm: byId("crm-user-form"),
+    crmUserName: byId("crm-user-name"),
+    crmUserEmail: byId("crm-user-email"),
+    crmUserPassword: byId("crm-user-password"),
+    crmUserRole: byId("crm-user-role"),
+    crmUserSubmit: byId("crm-user-submit"),
+    crmUsersList: byId("crm-users-list"),
+    auditPanel: byId("audit-panel"),
+    auditList: byId("audit-list"),
+    refreshAdministration: byId("refresh-administration"),
     logoutButton: byId("logout-button"),
     drawer: byId("opportunity-drawer"),
     drawerConversationId: byId("drawer-conversation-id"),
@@ -1944,6 +2365,8 @@ function bindEvents() {
   elements.deleteFilterPreset.addEventListener("click", deleteActiveFilterPreset);
   elements.managePipeline.addEventListener("click", () => switchView("settings"));
   elements.stageManagerForm.addEventListener("submit", addPipelineStage);
+  elements.crmUserForm?.addEventListener("submit", handleCrmUserCreate);
+  elements.refreshAdministration?.addEventListener("click", () => loadAdministrationData({ silent: false }));
   elements.transitionForm.addEventListener("submit", confirmTransition);
   document.querySelectorAll("[data-close-transition]").forEach((element) => {
     element.addEventListener("click", closeTransitionModal);
