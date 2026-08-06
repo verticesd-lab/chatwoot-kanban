@@ -58,4 +58,4 @@ assert.strictEqual(access.isInterventionConversation(conversations[1]), true);
 assert.strictEqual(access.isInterventionConversation(conversations[2]), false);
 assert.strictEqual(access.sortOperationalQueue(conversations)[0].id, 2);
 
-console.log("CRM V1.3.2 operational scope tests: OK");
+console.log("CRM V1.3.3 operational scope tests: OK");

@@ -67,6 +67,11 @@ try {
   assert.strictEqual(sdr.operationalRole, "sdr");
   assert.strictEqual(sdr.chatwootAgentId, 11);
   assert.strictEqual(sdr.visibilityScope, "unassigned_and_mine");
+  const sdrAuth = db.authenticate("sdr@example.com", "senha-vendedor-123");
+  const sdrSessionToken = db.createSession(sdrAuth, 60_000);
+  const sdrSession = db.getSession(sdrSessionToken.rawToken);
+  assert(!sdrSession.permissions.includes("assignments:manage"));
+  assert(sdrSession.permissions.includes("interventions:manage"));
 
   const seller = db.createUser({
     organizationId: session.organization_id,
@@ -130,10 +135,11 @@ try {
   assert(audit.some((entry) => entry.action === "intervention.resolved"));
 
   db.deleteSession(createdSession.rawToken);
+  db.deleteSession(sdrSessionToken.rawToken);
   db.deleteSession(sellerSessionToken.rawToken);
   assert.strictEqual(db.getSession(createdSession.rawToken), null);
 
-  console.log("CRM V1.3.2 central foundation tests: OK");
+  console.log("CRM V1.3.3 central foundation tests: OK");
 } finally {
   db.closeDatabase();
   fs.rmSync(tempDir, {

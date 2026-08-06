@@ -24,6 +24,9 @@ const ROLE_PERMISSIONS = {
     "audit:read",
     "assignments:manage",
     "interventions:manage",
+    "archive:manage",
+    "transfer_requests:manage",
+    "presence:read",
   ],
   manager: [
     "crm:read",
@@ -34,9 +37,12 @@ const ROLE_PERMISSIONS = {
     "audit:read",
     "assignments:manage",
     "interventions:manage",
+    "archive:manage",
+    "transfer_requests:manage",
+    "presence:read",
   ],
-  agent: ["crm:read", "opportunities:write", "messages:send"],
-  viewer: ["crm:read"],
+  agent: ["crm:read", "opportunities:write", "messages:send", "presence:read"],
+  viewer: ["crm:read", "presence:read"],
 };
 
 const OPERATIONAL_PROFILES = {
@@ -51,7 +57,7 @@ const OPERATIONAL_PROFILES = {
 const OPERATIONAL_PERMISSIONS = {
   admin: ["assignments:manage", "interventions:manage"],
   manager: ["assignments:manage", "interventions:manage"],
-  sdr: ["assignments:manage", "interventions:manage"],
+  sdr: ["interventions:manage"],
   seller: ["interventions:manage"],
   agent: ["assignments:manage", "interventions:manage"],
   viewer: [],
@@ -300,12 +306,65 @@ function createDatabase() {
       FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS user_presence (
+      user_id TEXT NOT NULL,
+      organization_id TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      last_action_at TEXT NOT NULL,
+      last_path TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, organization_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS archived_opportunities (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      conversation_id INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      note TEXT,
+      archived_by_user_id TEXT,
+      archived_at TEXT NOT NULL,
+      restored_by_user_id TEXT,
+      restored_at TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL,
+      UNIQUE (organization_id, conversation_id),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (archived_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (restored_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS transfer_requests (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      conversation_id INTEGER NOT NULL,
+      requested_by_user_id TEXT NOT NULL,
+      request_type TEXT NOT NULL DEFAULT 'redistribution',
+      reason TEXT NOT NULL,
+      previous_agent_id INTEGER,
+      target_agent_id INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','cancelled')),
+      resolved_by_user_id TEXT,
+      resolution_note TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (resolved_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_stages_pipeline_position ON pipeline_stages(pipeline_id, position);
     CREATE INDEX IF NOT EXISTS idx_filters_org_owner ON filter_presets(organization_id, owner_user_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_org_due ON crm_tasks(organization_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_audit_org_created ON audit_logs(organization_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_interventions_org_status ON interventions(organization_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_presence_org_seen ON user_presence(organization_id, last_seen_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_archive_org_active ON archived_opportunities(organization_id, active, archived_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_transfer_org_status ON transfer_requests(organization_id, status, created_at DESC);
   `);
 
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
@@ -333,6 +392,7 @@ function createDatabase() {
 
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(nowIso());
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(nowIso());
 
   return { db, databasePath };
 }
@@ -1047,6 +1107,376 @@ function markInterventionResolved({ organizationId, conversationId, actorUserId 
   });
 }
 
+
+function touchPresence({ organizationId, userId, path: requestPath = null, action = false }) {
+  if (!organizationId || !userId) return null;
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO user_presence
+    (user_id, organization_id, last_seen_at, last_action_at, last_path, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, organization_id) DO UPDATE SET
+      last_seen_at = excluded.last_seen_at,
+      last_action_at = CASE
+        WHEN ? = 1 THEN excluded.last_action_at
+        ELSE user_presence.last_action_at
+      END,
+      last_path = COALESCE(excluded.last_path, user_presence.last_path),
+      updated_at = excluded.updated_at
+  `).run(
+    userId,
+    organizationId,
+    now,
+    now,
+    requestPath ? String(requestPath).slice(0, 240) : null,
+    now,
+    action ? 1 : 0
+  );
+  return now;
+}
+
+function presenceStatus(lastSeenAt, referenceMs = Date.now()) {
+  const timestamp = Date.parse(lastSeenAt || "");
+  if (!Number.isFinite(timestamp)) return "offline";
+  const elapsed = referenceMs - timestamp;
+  if (elapsed <= 2 * 60 * 1000) return "online";
+  if (elapsed <= 10 * 60 * 1000) return "away";
+  return "offline";
+}
+
+function listPresence(organizationId, referenceMs = Date.now()) {
+  return db.prepare(`
+    SELECT u.id AS user_id, u.name, u.email, u.active,
+           m.operational_role, m.chatwoot_agent_id,
+           p.last_seen_at, p.last_action_at, p.last_path
+    FROM users u
+    JOIN memberships m ON m.user_id = u.id AND m.organization_id = ?
+    LEFT JOIN user_presence p ON p.user_id = u.id AND p.organization_id = m.organization_id
+    WHERE u.active = 1
+    ORDER BY u.name
+  `).all(organizationId).map((row) => ({
+    userId: row.user_id,
+    name: row.name,
+    email: row.email,
+    operationalRole: normalizeOperationalProfile(row.operational_role),
+    chatwootAgentId: row.chatwoot_agent_id ? Number(row.chatwoot_agent_id) : null,
+    lastSeenAt: row.last_seen_at || null,
+    lastActionAt: row.last_action_at || null,
+    lastPath: row.last_path || null,
+    status: presenceStatus(row.last_seen_at, referenceMs),
+  }));
+}
+
+function listOperationalUsers(organizationId, options = {}) {
+  const roles = Array.isArray(options.roles) ? options.roles : [];
+  const users = listUsers(organizationId).filter((user) => user.active && user.chatwootAgentId);
+  return roles.length
+    ? users.filter((user) => roles.includes(user.operationalRole))
+    : users;
+}
+
+function getOperationalUserByAgentId(organizationId, agentId) {
+  const parsed = Number(agentId);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return listOperationalUsers(organizationId).find(
+    (user) => Number(user.chatwootAgentId) === parsed
+  ) || null;
+}
+
+function archiveOpportunity({ organizationId, conversationId, actorUserId, reason, note = "" }) {
+  const parsedConversationId = Number(conversationId);
+  if (!Number.isInteger(parsedConversationId) || parsedConversationId <= 0) {
+    const error = new Error("Conversa inválida");
+    error.status = 400;
+    throw error;
+  }
+  const cleanReason = String(reason || "").trim().slice(0, 120);
+  if (!cleanReason) {
+    const error = new Error("Informe o motivo do arquivamento");
+    error.status = 400;
+    throw error;
+  }
+  const now = nowIso();
+  const existing = db.prepare(`
+    SELECT * FROM archived_opportunities
+    WHERE organization_id = ? AND conversation_id = ?
+  `).get(organizationId, parsedConversationId);
+  db.prepare(`
+    INSERT INTO archived_opportunities
+    (id, organization_id, conversation_id, reason, note, archived_by_user_id,
+     archived_at, restored_by_user_id, restored_at, active, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?)
+    ON CONFLICT(organization_id, conversation_id) DO UPDATE SET
+      reason = excluded.reason,
+      note = excluded.note,
+      archived_by_user_id = excluded.archived_by_user_id,
+      archived_at = excluded.archived_at,
+      restored_by_user_id = NULL,
+      restored_at = NULL,
+      active = 1,
+      updated_at = excluded.updated_at
+  `).run(
+    existing?.id || crypto.randomUUID(),
+    organizationId,
+    parsedConversationId,
+    cleanReason,
+    String(note || "").trim().slice(0, 500) || null,
+    actorUserId || null,
+    now,
+    now
+  );
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "opportunity.archived",
+    entityType: "conversation",
+    entityId: parsedConversationId,
+    before: existing && existing.active ? { archived: true, reason: existing.reason } : { archived: false },
+    after: { archived: true, reason: cleanReason, note: String(note || "").trim() || null },
+  });
+  return getArchivedOpportunity(organizationId, parsedConversationId);
+}
+
+function restoreOpportunity({ organizationId, conversationId, actorUserId }) {
+  const parsedConversationId = Number(conversationId);
+  const current = db.prepare(`
+    SELECT * FROM archived_opportunities
+    WHERE organization_id = ? AND conversation_id = ? AND active = 1
+  `).get(organizationId, parsedConversationId);
+  if (!current) return null;
+  const now = nowIso();
+  db.prepare(`
+    UPDATE archived_opportunities
+    SET active = 0, restored_by_user_id = ?, restored_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(actorUserId || null, now, now, current.id);
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "opportunity.restored",
+    entityType: "conversation",
+    entityId: parsedConversationId,
+    before: { archived: true, reason: current.reason },
+    after: { archived: false },
+  });
+  return { conversationId: parsedConversationId, restoredAt: now };
+}
+
+function getArchivedOpportunity(organizationId, conversationId) {
+  const row = db.prepare(`
+    SELECT a.*, u.name AS archived_by_name, r.name AS restored_by_name
+    FROM archived_opportunities a
+    LEFT JOIN users u ON u.id = a.archived_by_user_id
+    LEFT JOIN users r ON r.id = a.restored_by_user_id
+    WHERE a.organization_id = ? AND a.conversation_id = ? AND a.active = 1
+  `).get(organizationId, Number(conversationId));
+  if (!row) return null;
+  return {
+    id: row.id,
+    conversationId: Number(row.conversation_id),
+    reason: row.reason,
+    note: row.note || "",
+    archivedByUserId: row.archived_by_user_id || null,
+    archivedByName: row.archived_by_name || "Sistema",
+    archivedAt: row.archived_at,
+    active: Boolean(row.active),
+  };
+}
+
+function listArchivedOpportunities(organizationId) {
+  return db.prepare(`
+    SELECT a.*, u.name AS archived_by_name
+    FROM archived_opportunities a
+    LEFT JOIN users u ON u.id = a.archived_by_user_id
+    WHERE a.organization_id = ? AND a.active = 1
+    ORDER BY a.archived_at DESC
+  `).all(organizationId).map((row) => ({
+    id: row.id,
+    conversationId: Number(row.conversation_id),
+    reason: row.reason,
+    note: row.note || "",
+    archivedByUserId: row.archived_by_user_id || null,
+    archivedByName: row.archived_by_name || "Sistema",
+    archivedAt: row.archived_at,
+    active: Boolean(row.active),
+  }));
+}
+
+function archivedConversationIds(organizationId) {
+  return new Set(
+    listArchivedOpportunities(organizationId).map((item) => Number(item.conversationId))
+  );
+}
+
+function createTransferRequest({
+  organizationId,
+  conversationId,
+  requestedByUserId,
+  reason,
+  previousAgentId = null,
+}) {
+  const parsedConversationId = Number(conversationId);
+  const cleanReason = String(reason || "").trim().slice(0, 500);
+  if (!Number.isInteger(parsedConversationId) || parsedConversationId <= 0 || !cleanReason) {
+    const error = new Error("Conversa e motivo são obrigatórios");
+    error.status = 400;
+    throw error;
+  }
+  const existing = db.prepare(`
+    SELECT * FROM transfer_requests
+    WHERE organization_id = ? AND conversation_id = ? AND status = 'pending'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(organizationId, parsedConversationId);
+  if (existing) {
+    const error = new Error("Já existe uma solicitação pendente para esta oportunidade");
+    error.status = 409;
+    throw error;
+  }
+  const id = crypto.randomUUID();
+  const now = nowIso();
+  db.prepare(`
+    INSERT INTO transfer_requests
+    (id, organization_id, conversation_id, requested_by_user_id, request_type,
+     reason, previous_agent_id, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'redistribution', ?, ?, 'pending', ?, ?)
+  `).run(
+    id,
+    organizationId,
+    parsedConversationId,
+    requestedByUserId,
+    cleanReason,
+    Number(previousAgentId) || null,
+    now,
+    now
+  );
+  logAudit({
+    organizationId,
+    actorUserId: requestedByUserId,
+    action: "transfer.requested",
+    entityType: "conversation",
+    entityId: parsedConversationId,
+    after: { requestId: id, reason: cleanReason, previousAgentId: Number(previousAgentId) || null },
+  });
+  return getTransferRequest(organizationId, id);
+}
+
+function getTransferRequest(organizationId, requestId) {
+  const row = db.prepare(`
+    SELECT t.*, requester.name AS requester_name, resolver.name AS resolver_name
+    FROM transfer_requests t
+    JOIN users requester ON requester.id = t.requested_by_user_id
+    LEFT JOIN users resolver ON resolver.id = t.resolved_by_user_id
+    WHERE t.organization_id = ? AND t.id = ?
+  `).get(organizationId, requestId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    conversationId: Number(row.conversation_id),
+    requestedByUserId: row.requested_by_user_id,
+    requesterName: row.requester_name,
+    requestType: row.request_type,
+    reason: row.reason,
+    previousAgentId: row.previous_agent_id ? Number(row.previous_agent_id) : null,
+    targetAgentId: row.target_agent_id ? Number(row.target_agent_id) : null,
+    status: row.status,
+    resolvedByUserId: row.resolved_by_user_id || null,
+    resolverName: row.resolver_name || null,
+    resolutionNote: row.resolution_note || "",
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at || null,
+  };
+}
+
+function listTransferRequests(organizationId, status = "pending") {
+  const normalizedStatus = ["pending", "approved", "rejected", "cancelled", "all"].includes(status)
+    ? status
+    : "pending";
+  const rows = normalizedStatus === "all"
+    ? db.prepare(`
+        SELECT t.id FROM transfer_requests t
+        WHERE t.organization_id = ?
+        ORDER BY t.created_at DESC LIMIT 200
+      `).all(organizationId)
+    : db.prepare(`
+        SELECT t.id FROM transfer_requests t
+        WHERE t.organization_id = ? AND t.status = ?
+        ORDER BY t.created_at DESC LIMIT 200
+      `).all(organizationId, normalizedStatus);
+  return rows.map((row) => getTransferRequest(organizationId, row.id));
+}
+
+function resolveTransferRequest({
+  organizationId,
+  requestId,
+  actorUserId,
+  status,
+  targetAgentId = null,
+  resolutionNote = "",
+}) {
+  const current = getTransferRequest(organizationId, requestId);
+  if (!current) return null;
+  if (current.status !== "pending") {
+    const error = new Error("Esta solicitação já foi finalizada");
+    error.status = 409;
+    throw error;
+  }
+  const nextStatus = status === "approved" ? "approved" : "rejected";
+  const now = nowIso();
+  db.prepare(`
+    UPDATE transfer_requests
+    SET status = ?, target_agent_id = ?, resolved_by_user_id = ?,
+        resolution_note = ?, resolved_at = ?, updated_at = ?
+    WHERE id = ? AND organization_id = ?
+  `).run(
+    nextStatus,
+    nextStatus === "approved" ? Number(targetAgentId) || null : null,
+    actorUserId || null,
+    String(resolutionNote || "").trim().slice(0, 500) || null,
+    now,
+    now,
+    requestId,
+    organizationId
+  );
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: nextStatus === "approved" ? "transfer.approved" : "transfer.rejected",
+    entityType: "conversation",
+    entityId: current.conversationId,
+    before: { requestId, status: current.status },
+    after: {
+      requestId,
+      status: nextStatus,
+      targetAgentId: nextStatus === "approved" ? Number(targetAgentId) || null : null,
+      resolutionNote: String(resolutionNote || "").trim() || null,
+    },
+  });
+  return getTransferRequest(organizationId, requestId);
+}
+
+function logDirectHandoff({
+  organizationId,
+  actorUserId,
+  conversationId,
+  action,
+  reason,
+  previousAgentId,
+  targetAgentId,
+  stageBefore = null,
+  stageAfter = null,
+}) {
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "handoff.completed",
+    entityType: "conversation",
+    entityId: conversationId,
+    before: { assigneeAgentId: Number(previousAgentId) || null, stage: stageBefore },
+    after: { assigneeAgentId: Number(targetAgentId) || null, stage: stageAfter },
+    metadata: { action, reason: String(reason || "").trim() },
+  });
+}
+
 function closeDatabase() {
   db.close();
 }
@@ -1118,6 +1548,20 @@ module.exports = {
   syncInterventions,
   markInterventionAssumed,
   markInterventionResolved,
+  touchPresence,
+  listPresence,
+  listOperationalUsers,
+  getOperationalUserByAgentId,
+  archiveOpportunity,
+  restoreOpportunity,
+  getArchivedOpportunity,
+  listArchivedOpportunities,
+  archivedConversationIds,
+  createTransferRequest,
+  getTransferRequest,
+  listTransferRequests,
+  resolveTransferRequest,
+  logDirectHandoff,
   logAudit,
   listAudit,
   closeDatabase,

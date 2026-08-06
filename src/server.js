@@ -84,6 +84,12 @@ function requireSession(req, res, next) {
   const session = db.getSession(getRawSessionToken(req));
   if (!session) return res.status(401).json({ error: "Sessão não autenticada ou expirada" });
   req.crmSession = session;
+  db.touchPresence({
+    organizationId: session.organization_id,
+    userId: session.user_id,
+    path: req.path,
+    action: !["GET", "HEAD", "OPTIONS"].includes(req.method),
+  });
   next();
 }
 
@@ -209,6 +215,63 @@ async function writeConversationLabels(session, conversationId, labels) {
   return updated.length ? updated : normalizeLabelNames(labels);
 }
 
+async function assignConversation(session, conversationId, targetAgentId) {
+  const response = await chatwootRequest(session, {
+    method: "POST",
+    url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations/${conversationId}/assignments`,
+    data: { assignee_id: Number(targetAgentId) },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    const error = new Error("Falha ao transferir a oportunidade no Chatwoot");
+    error.status = response.status;
+    error.response = response.data;
+    throw error;
+  }
+  return response.data;
+}
+
+async function writeConversationCustomAttributes(session, conversationId, customAttributes) {
+  const response = await chatwootRequest(session, {
+    method: "POST",
+    url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations/${conversationId}/custom_attributes`,
+    data: { custom_attributes: customAttributes },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    const error = new Error("Falha ao atualizar os dados comerciais da oportunidade");
+    error.status = response.status;
+    error.response = response.data;
+    throw error;
+  }
+  return response.data;
+}
+
+function allowedHandoffTargets(session) {
+  const role = String(session.operational_role || "agent");
+  if (["admin", "manager"].includes(role)) return ["admin", "manager", "sdr", "seller", "agent"];
+  if (role === "sdr") return ["seller", "manager", "admin"];
+  if (role === "seller") return ["sdr", "manager", "admin"];
+  return [];
+}
+
+function validateHandoffAction(session, action, targetUser) {
+  const role = String(session.operational_role || "agent");
+  if (["admin", "manager"].includes(role)) {
+    if (action !== "transfer") throw Object.assign(new Error("Ação de encaminhamento inválida"), { status: 400 });
+    return;
+  }
+  if (role === "sdr") {
+    if (action === "to_seller" && targetUser?.operationalRole === "seller") return;
+    if (action === "to_manager" && ["manager", "admin"].includes(targetUser?.operationalRole)) return;
+    throw Object.assign(new Error("A SDR só pode encaminhar para vendedor ou gerente"), { status: 403 });
+  }
+  if (role === "seller") {
+    if (action === "return_to_sdr" && targetUser?.operationalRole === "sdr") return;
+    if (action === "to_manager" && ["manager", "admin"].includes(targetUser?.operationalRole)) return;
+    throw Object.assign(new Error("O vendedor só pode devolver para SDR ou escalar para gerente"), { status: 403 });
+  }
+  throw Object.assign(new Error("Seu perfil não pode encaminhar oportunidades"), { status: 403 });
+}
+
 function normalizeStages(input) {
   if (!Array.isArray(input) || input.length < 3 || input.length > 50) {
     const error = new Error("Informe entre 3 e 50 etapas válidas");
@@ -314,7 +377,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.3.2-operational-scopes",
+    version: "1.3.3-operational-control",
     database: "sqlite-central",
   });
 });
@@ -367,6 +430,12 @@ app.post("/api/session", async (req, res) => {
     entityType: "session",
     metadata: { ip: req.ip, userAgent: String(req.headers["user-agent"] || "").slice(0, 240) },
   });
+  db.touchPresence({
+    organizationId: session.organization_id,
+    userId: session.user_id,
+    path: "/login",
+    action: true,
+  });
   res.setHeader("Set-Cookie", sessionCookie(created.rawToken, req));
   return res.json(db.sessionPayload(session));
 });
@@ -391,6 +460,20 @@ app.delete("/api/session", (req, res) => {
   db.deleteSession(rawToken);
   res.setHeader("Set-Cookie", clearSessionCookie(req));
   return res.status(204).send();
+});
+
+app.post("/api/crm/presence/heartbeat", requireSession, (req, res) => {
+  const seenAt = db.touchPresence({
+    organizationId: req.crmSession.organization_id,
+    userId: req.crmSession.user_id,
+    path: String(req.body?.view || req.path).slice(0, 120),
+    action: Boolean(req.body?.action),
+  });
+  return res.json({ ok: true, seenAt });
+});
+
+app.get("/api/crm/presence", requireSession, requirePermission("presence:read"), (req, res) => {
+  return res.json({ presence: db.listPresence(req.crmSession.organization_id) });
 });
 
 const CRM_ATTRIBUTE_DEFINITIONS = [
@@ -450,6 +533,14 @@ const CRM_ATTRIBUTE_DEFINITIONS = [
     attribute_values: [],
     attribute_model: 0,
   },
+  {
+    attribute_display_name: "Data do desfecho CRM",
+    attribute_display_type: 0,
+    attribute_description: "Data e hora em que a oportunidade foi marcada como ganha ou perdida",
+    attribute_key: "crm_outcome_at",
+    attribute_values: [],
+    attribute_model: 0,
+  },
 ];
 
 app.get("/api/crm/config", requireSession, (req, res) => {
@@ -468,11 +559,29 @@ app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => 
       organizationId: req.crmSession.organization_id,
       conversations: allConversations,
     });
-    const conversations = access
+    const scopedConversations = access
       .filterConversationsForSession(req.crmSession, allConversations);
-    const sortedConversations = access.sortOperationalQueue(conversations);
+    const archivedItems = db.listArchivedOpportunities(req.crmSession.organization_id);
+    const archivedByConversation = new Map(
+      archivedItems.map((item) => [Number(item.conversationId), item])
+    );
+    const activeConversations = scopedConversations.filter(
+      (conversation) => !archivedByConversation.has(Number(conversation.id))
+    );
+    const canViewArchive = hasPermission(req.crmSession, "archive:manage");
+    const archivedConversations = canViewArchive
+      ? scopedConversations
+          .filter((conversation) => archivedByConversation.has(Number(conversation.id)))
+          .map((conversation) => ({
+            ...conversation,
+            crm_archive: archivedByConversation.get(Number(conversation.id)),
+          }))
+      : [];
+    const sortedConversations = access.sortOperationalQueue(activeConversations);
     return res.json({
       conversations: sortedConversations,
+      archivedConversations,
+      archivedCount: archivedConversations.length,
       totalVisible: sortedConversations.length,
       totalOrganization: allConversations.length,
       interventionCount: sortedConversations.filter(access.isInterventionConversation).length,
@@ -689,6 +798,239 @@ app.get("/api/crm/audit", requireSession, requirePermission("audit:read"), (req,
   return res.json({ audit: db.listAudit(req.crmSession.organization_id, req.query.limit) });
 });
 
+app.get("/api/crm/handoff/targets", requireSession, (req, res) => {
+  const roles = allowedHandoffTargets(req.crmSession);
+  const actorRole = String(req.crmSession.operational_role || "agent");
+  const targets = db.listOperationalUsers(req.crmSession.organization_id, { roles })
+    .filter((user) => ["admin", "manager"].includes(actorRole) || user.id !== req.crmSession.user_id)
+    .map((user) => ({
+      id: user.id,
+      name: user.name,
+      operationalRole: user.operationalRole,
+      chatwootAgentId: user.chatwootAgentId,
+    }));
+  return res.json({ targets });
+});
+
+app.post("/api/crm/opportunities/:conversationId/handoff", requireSession, async (req, res) => {
+  const conversationId = Number(req.params.conversationId);
+  const action = String(req.body?.action || "").trim();
+  const reason = String(req.body?.reason || "").trim().slice(0, 500);
+  const targetAgentId = Number(req.body?.targetAgentId || 0);
+  if (!Number.isInteger(conversationId) || conversationId <= 0 || !action || reason.length < 3) {
+    return res.status(400).json({ error: "Informe a ação e o motivo do encaminhamento" });
+  }
+
+  try {
+    const conversation = await requireConversationAccess(req, res, conversationId);
+    if (!conversation) return;
+    const currentAgentId = access.extractAssigneeId(conversation);
+    const actorRole = String(req.crmSession.operational_role || "agent");
+
+    if (actorRole === "seller" && action === "request_redistribution") {
+      const request = db.createTransferRequest({
+        organizationId: req.crmSession.organization_id,
+        conversationId,
+        requestedByUserId: req.crmSession.user_id,
+        reason,
+        previousAgentId: currentAgentId,
+      });
+      return res.status(201).json({ requested: true, request });
+    }
+
+    const targetUser = db.getOperationalUserByAgentId(
+      req.crmSession.organization_id,
+      targetAgentId
+    );
+    if (!targetUser) {
+      return res.status(400).json({ error: "Selecione um responsável válido e ativo" });
+    }
+    validateHandoffAction(req.crmSession, action, targetUser);
+
+    const attributes = conversation.custom_attributes || {};
+    const stageBefore = String(attributes.crm_stage || "new");
+    let stageAfter = stageBefore;
+    if (action === "to_seller" && targetUser.operationalRole === "seller") {
+      stageAfter = "proposal";
+    } else if (action === "return_to_sdr" && targetUser.operationalRole === "sdr") {
+      stageAfter = "qualification";
+    }
+
+    await assignConversation(req.crmSession, conversationId, targetAgentId);
+    if (stageAfter !== stageBefore) {
+      await writeConversationCustomAttributes(req.crmSession, conversationId, {
+        ...attributes,
+        crm_stage: stageAfter,
+        crm_outcome_at: null,
+      });
+    }
+
+    db.logDirectHandoff({
+      organizationId: req.crmSession.organization_id,
+      actorUserId: req.crmSession.user_id,
+      conversationId,
+      action,
+      reason,
+      previousAgentId: currentAgentId,
+      targetAgentId,
+      stageBefore,
+      stageAfter,
+    });
+
+    return res.json({
+      transferred: true,
+      action,
+      reason,
+      previousAgentId: currentAgentId,
+      targetAgentId,
+      targetUser: {
+        name: targetUser.name,
+        operationalRole: targetUser.operationalRole,
+      },
+      stageBefore,
+      stageAfter,
+    });
+  } catch (error) {
+    console.error("Erro no encaminhamento controlado:", error.message);
+    return res.status(error.status || 502).json({
+      error: error.message || "Falha ao encaminhar a oportunidade",
+      details: error.response || undefined,
+    });
+  }
+});
+
+app.get(
+  "/api/crm/transfer-requests",
+  requireSession,
+  requirePermission("transfer_requests:manage"),
+  (req, res) => {
+    return res.json({
+      requests: db.listTransferRequests(
+        req.crmSession.organization_id,
+        String(req.query.status || "pending")
+      ),
+    });
+  }
+);
+
+app.post(
+  "/api/crm/transfer-requests/:id/resolve",
+  requireSession,
+  requirePermission("transfer_requests:manage"),
+  async (req, res) => {
+    const decision = req.body?.decision === "approved" ? "approved" : "rejected";
+    const targetAgentId = Number(req.body?.targetAgentId || 0);
+    const resolutionNote = String(req.body?.resolutionNote || "").trim().slice(0, 500);
+    try {
+      const request = db.getTransferRequest(req.crmSession.organization_id, req.params.id);
+      if (!request) return res.status(404).json({ error: "Solicitação não encontrada" });
+      if (decision === "approved") {
+        const targetUser = db.getOperationalUserByAgentId(
+          req.crmSession.organization_id,
+          targetAgentId
+        );
+        if (!targetUser) {
+          return res.status(400).json({ error: "Selecione um responsável válido" });
+        }
+        const fetched = await fetchConversation(req.crmSession, request.conversationId);
+        if (!fetched.conversation) return relayAxiosResponse(res, fetched.response);
+        await assignConversation(req.crmSession, request.conversationId, targetAgentId);
+        const attributes = fetched.conversation.custom_attributes || {};
+        const stageBefore = String(attributes.crm_stage || "new");
+        let stageAfter = stageBefore;
+        if (targetUser.operationalRole === "seller" && ["new", "contacted", "qualification"].includes(stageBefore)) {
+          stageAfter = "proposal";
+        } else if (targetUser.operationalRole === "sdr" && ["proposal", "negotiation"].includes(stageBefore)) {
+          stageAfter = "qualification";
+        }
+        if (stageAfter !== stageBefore) {
+          await writeConversationCustomAttributes(req.crmSession, request.conversationId, {
+            ...attributes,
+            crm_stage: stageAfter,
+            crm_outcome_at: null,
+          });
+        }
+        db.logDirectHandoff({
+          organizationId: req.crmSession.organization_id,
+          actorUserId: req.crmSession.user_id,
+          conversationId: request.conversationId,
+          action: "redistribution_approved",
+          reason: request.reason,
+          previousAgentId: request.previousAgentId,
+          targetAgentId,
+          stageBefore,
+          stageAfter,
+        });
+      }
+      const resolved = db.resolveTransferRequest({
+        organizationId: req.crmSession.organization_id,
+        requestId: req.params.id,
+        actorUserId: req.crmSession.user_id,
+        status: decision,
+        targetAgentId: decision === "approved" ? targetAgentId : null,
+        resolutionNote,
+      });
+      return res.json({ request: resolved });
+    } catch (error) {
+      console.error("Erro ao resolver redistribuição:", error.message);
+      return res.status(error.status || 502).json({
+        error: error.message || "Falha ao resolver a redistribuição",
+        details: error.response || undefined,
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/crm/opportunities/:conversationId/archive",
+  requireSession,
+  requirePermission("archive:manage"),
+  async (req, res) => {
+    const conversationId = Number(req.params.conversationId);
+    const reason = String(req.body?.reason || "").trim();
+    const note = String(req.body?.note || "").trim();
+    if (!Number.isInteger(conversationId) || conversationId <= 0 || !reason) {
+      return res.status(400).json({ error: "Informe a conversa e o motivo do arquivamento" });
+    }
+    if (reason === "Outro" && note.length < 3) {
+      return res.status(400).json({ error: "Descreva o motivo do arquivamento" });
+    }
+    try {
+      const conversation = await requireConversationAccess(req, res, conversationId);
+      if (!conversation) return;
+      const archived = db.archiveOpportunity({
+        organizationId: req.crmSession.organization_id,
+        conversationId,
+        actorUserId: req.crmSession.user_id,
+        reason,
+        note,
+      });
+      return res.json({ archived });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.message || "Falha ao arquivar" });
+    }
+  }
+);
+
+app.post(
+  "/api/crm/opportunities/:conversationId/restore",
+  requireSession,
+  requirePermission("archive:manage"),
+  (req, res) => {
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isInteger(conversationId) || conversationId <= 0) {
+      return res.status(400).json({ error: "Conversa inválida" });
+    }
+    const restored = db.restoreOpportunity({
+      organizationId: req.crmSession.organization_id,
+      conversationId,
+      actorUserId: req.crmSession.user_id,
+    });
+    if (!restored) return res.status(404).json({ error: "Oportunidade arquivada não encontrada" });
+    return res.json({ restored });
+  }
+);
+
 app.post(
   "/api/crm/opportunities/:conversationId/labels",
   requireSession,
@@ -899,16 +1241,27 @@ app.post(
         ? conversationResponse.data?.data || conversationResponse.data?.payload || conversationResponse.data
         : null;
       const before = pickCrmAttributes(currentConversation?.custom_attributes);
+      const effectiveAttributes = { ...customAttributes };
+      const stageBefore = String(before?.crm_stage || "new");
+      const stageAfter = String(effectiveAttributes.crm_stage || stageBefore);
+      const terminalStages = new Set(["won", "lost"]);
+      if (terminalStages.has(stageAfter)) {
+        if (!terminalStages.has(stageBefore) || !effectiveAttributes.crm_outcome_at) {
+          effectiveAttributes.crm_outcome_at = effectiveAttributes.crm_outcome_at || new Date().toISOString();
+        }
+      } else if (terminalStages.has(stageBefore) || effectiveAttributes.crm_outcome_at) {
+        effectiveAttributes.crm_outcome_at = null;
+      }
       const updateResponse = await chatwootRequest(req.crmSession, {
         method: "POST",
         url: `${req.crmSession.chatwoot_base_url}/api/v1/accounts/${req.crmSession.chatwoot_account_id}/conversations/${conversationId}/custom_attributes`,
-        data: { custom_attributes: customAttributes },
+        data: { custom_attributes: effectiveAttributes },
       });
       if (updateResponse.status >= 200 && updateResponse.status < 300) {
         db.syncTaskFromAttributes({
           organizationId: req.crmSession.organization_id,
           conversationId,
-          attributes: customAttributes,
+          attributes: effectiveAttributes,
           actorUserId: req.crmSession.user_id,
         });
         db.logAudit({
@@ -918,11 +1271,17 @@ app.post(
           entityType: "conversation",
           entityId: conversationId,
           before,
-          after: pickCrmAttributes(customAttributes),
+          after: pickCrmAttributes(effectiveAttributes),
           metadata: {
-            stageBefore: before?.crm_stage || null,
-            stageAfter: customAttributes.crm_stage || null,
+            stageBefore,
+            stageAfter,
           },
+        });
+      }
+      if (updateResponse.status >= 200 && updateResponse.status < 300) {
+        return res.status(updateResponse.status).json({
+          ...(typeof updateResponse.data === "object" && updateResponse.data ? updateResponse.data : {}),
+          effectiveCustomAttributes: effectiveAttributes,
         });
       }
       return relayAxiosResponse(res, updateResponse);
@@ -1048,6 +1407,6 @@ app.use((error, _req, res, _next) => {
 setInterval(db.cleanupSessions, 15 * 60 * 1000).unref();
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`CRM central V1.3.2 rodando na porta ${PORT}`);
+  console.log(`CRM central V1.3.3 rodando na porta ${PORT}`);
   console.log(`Banco central: ${db.databasePath}`);
 });
