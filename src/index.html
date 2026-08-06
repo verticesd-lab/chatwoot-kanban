@@ -81,6 +81,14 @@
             <span class="nav-icon">▥</span>
             Pipeline
           </button>
+          <button class="nav-item" data-view="history">
+            <span class="nav-icon">◷</span>
+            Histórico
+          </button>
+          <button id="archive-nav-item" class="nav-item is-hidden" data-view="archive">
+            <span class="nav-icon">▣</span>
+            Arquivo
+          </button>
           <button class="nav-item" data-view="conversations">
             <span class="nav-icon">◌</span>
             Conversas
@@ -104,8 +112,16 @@
           </button>
         </nav>
 
+        <div id="sidebar-presence" class="sidebar-presence">
+          <div class="sidebar-presence-heading">
+            <span>Equipe agora</span>
+            <button id="refresh-presence" class="text-button" type="button" title="Atualizar presença">↻</button>
+          </div>
+          <div id="sidebar-presence-list" class="sidebar-presence-list"></div>
+        </div>
+
         <div class="sidebar-account">
-          <span class="status-dot"></span>
+          <span id="current-user-status-dot" class="status-dot"></span>
           <div>
             <strong id="sidebar-user-name">Usuário conectado</strong>
             <span id="sidebar-user-role">Perfil —</span>
@@ -144,6 +160,28 @@
         <main class="content">
           <section id="view-dashboard" class="view is-active">
             <div id="metrics-grid" class="metrics-grid"></div>
+
+
+            <article id="monthly-sales-goal-card" class="panel monthly-sales-goal-card is-hidden">
+              <div class="monthly-goal-header">
+                <div>
+                  <p class="eyebrow">META DA LOJA</p>
+                  <h2 id="monthly-sales-goal-title">Meta mensal</h2>
+                  <p id="monthly-sales-goal-period" class="muted">—</p>
+                </div>
+                <div class="monthly-goal-score">
+                  <strong id="monthly-sales-goal-score">0 / 0</strong>
+                  <span>vendas</span>
+                </div>
+              </div>
+              <div class="monthly-goal-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="monthly-sales-goal-fill" class="monthly-goal-fill"></div>
+              </div>
+              <div class="monthly-goal-footer">
+                <strong id="monthly-sales-goal-message">Meta desativada</strong>
+                <span id="monthly-sales-goal-percentage">0%</span>
+              </div>
+            </article>
 
             <div class="dashboard-grid">
               <article class="panel panel-wide">
@@ -194,6 +232,16 @@
                 <span>pendentes no seu escopo</span>
               </div>
             </div>
+            <article id="transfer-requests-panel" class="panel transfer-requests-panel is-hidden">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">REDISTRIBUIÇÃO</p>
+                  <h3>Solicitações dos vendedores</h3>
+                </div>
+                <span id="transfer-request-count" class="count-badge">0</span>
+              </div>
+              <div id="transfer-request-list" class="transfer-request-list"></div>
+            </article>
             <div class="intervention-toolbar">
               <button class="button button-primary" type="button" data-intervention-filter="all">Todas</button>
               <button class="button button-ghost" type="button" data-intervention-filter="unassigned">Sem responsável</button>
@@ -231,6 +279,18 @@
                 <option value="overdue">Tarefa vencida</option>
                 <option value="done">Tarefa concluída</option>
               </select>
+              <select id="filter-period" aria-label="Período de ganho e perda">
+                <option value="today">Encerrados hoje</option>
+                <option value="7d" selected>Encerrados: últimos 7 dias</option>
+                <option value="30d">Encerrados: últimos 30 dias</option>
+                <option value="month">Encerrados: este mês</option>
+                <option value="custom">Período personalizado</option>
+                <option value="all">Todo o histórico</option>
+              </select>
+              <div id="custom-period-fields" class="custom-period-fields is-hidden">
+                <input id="filter-period-start" type="date" aria-label="Data inicial" />
+                <input id="filter-period-end" type="date" aria-label="Data final" />
+              </div>
               <span class="toolbar-divider" aria-hidden="true"></span>
               <select id="filter-preset" aria-label="Aplicar filtro salvo">
                 <option value="">Filtros salvos</option>
@@ -326,6 +386,57 @@
             </article>
           </section>
 
+
+          <section id="view-history" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header history-panel-header">
+                <div>
+                  <p class="eyebrow">RESULTADOS</p>
+                  <h2>Histórico encerrado</h2>
+                  <p class="muted">Consulte oportunidades ganhas ou perdidas sem poluir o Pipeline diário.</p>
+                </div>
+                <div class="history-filters">
+                  <select id="history-type" aria-label="Tipo de resultado">
+                    <option value="all">Ganho e perdido</option>
+                    <option value="won">Somente ganho</option>
+                    <option value="lost">Somente perdido</option>
+                  </select>
+                  <select id="history-period" aria-label="Período do histórico">
+                    <option value="today">Hoje</option>
+                    <option value="7d">Últimos 7 dias</option>
+                    <option value="30d" selected>Últimos 30 dias</option>
+                    <option value="month">Este mês</option>
+                    <option value="custom">Período personalizado</option>
+                    <option value="all">Todo o histórico</option>
+                  </select>
+                  <div id="history-custom-period-fields" class="custom-period-fields is-hidden">
+                    <input id="history-period-start" type="date" aria-label="Data inicial do histórico" />
+                    <input id="history-period-end" type="date" aria-label="Data final do histórico" />
+                  </div>
+                  <span id="history-count" class="count-badge">0</span>
+                </div>
+              </div>
+              <div id="history-list" class="history-result-list"></div>
+            </article>
+          </section>
+
+          <section id="view-archive" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">ORGANIZAÇÃO</p>
+                  <h2>Oportunidades arquivadas</h2>
+                  <p class="muted">Itens retirados da rotina diária, com histórico preservado e possibilidade de restauração.</p>
+                </div>
+                <div class="archive-total-summary" aria-live="polite">
+                  <span>Total arquivado</span>
+                  <strong id="archive-count">0</strong>
+                </div>
+              </div>
+              <div id="archive-list" class="archive-list"></div>
+            </article>
+          </section>
+
           <section id="view-settings" class="view">
             <div class="settings-grid">
               <article class="panel">
@@ -343,6 +454,32 @@
                   Inicializar atributos CRM
                 </button>
                 <div id="bootstrap-result" class="result-box"></div>
+              </article>
+
+
+              <article id="monthly-goal-settings-panel" class="panel is-hidden">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">META DA LOJA</p>
+                    <h2>Meta mensal de vendas</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Exibe no Dashboard o progresso da loja entre o primeiro e o último dia do mês.
+                  A meta começa desativada e pode ser ligada quando a equipe estiver pronta.
+                </p>
+                <form id="monthly-goal-settings-form" class="monthly-goal-settings-form">
+                  <label class="settings-toggle-row">
+                    <input id="monthly-goal-enabled" type="checkbox" />
+                    <span>Exibir a meta mensal no Dashboard</span>
+                  </label>
+                  <label>
+                    Meta mensal de vendas
+                    <input id="monthly-goal-target" type="number" min="1" max="100000" step="1" placeholder="Ex.: 50" />
+                  </label>
+                  <button class="button button-primary" type="submit">Salvar meta mensal</button>
+                </form>
+                <div id="monthly-goal-settings-result" class="result-box"></div>
               </article>
 
               <article id="pipeline-settings-panel" class="panel pipeline-settings-panel">
@@ -469,6 +606,15 @@
                 </button>
               </div>
             </div>
+            <div id="drawer-handoff-panel" class="drawer-handoff-panel">
+              <div>
+                <span class="field-caption">Encaminhamento</span>
+                <small id="drawer-handoff-helper">Transfira esta oportunidade conforme as permissões do seu perfil.</small>
+              </div>
+              <button id="open-handoff" type="button" class="button button-ghost button-small">
+                Encaminhar atendimento
+              </button>
+            </div>
             <div class="field-grid">
               <label>
                 Etapa comercial
@@ -542,6 +688,7 @@
             <div class="drawer-actions">
               <button id="save-opportunity" class="button button-primary">Salvar alterações</button>
               <button id="open-chatwoot" class="button button-ghost">Abrir no Chatwoot</button>
+              <button id="archive-opportunity" class="button button-danger is-hidden" type="button">Arquivar oportunidade</button>
             </div>
           </section>
 
@@ -604,6 +751,112 @@
         <div class="modal-actions">
           <button type="button" class="button button-ghost" data-close-transition>Cancelar</button>
           <button id="transition-confirm" type="submit" class="button button-primary">Confirmar</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="handoff-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-handoff></div>
+      <form id="handoff-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">ENCAMINHAMENTO CONTROLADO</p>
+            <h2>Encaminhar oportunidade</h2>
+            <p id="handoff-description" class="muted">Selecione a ação permitida para seu perfil.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-handoff aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Ação
+          <select id="handoff-action" required></select>
+        </label>
+        <label id="handoff-target-field">
+          Destino
+          <select id="handoff-target"></select>
+        </label>
+        <label>
+          Motivo
+          <select id="handoff-reason-select" required>
+            <option value="">Selecione o motivo</option>
+            <option value="Lead atribuído por engano">Lead atribuído por engano</option>
+            <option value="Faltam dados de qualificação">Faltam dados de qualificação</option>
+            <option value="Condição comercial especial">Condição comercial especial</option>
+            <option value="Cliente já atendido por outra pessoa">Cliente já atendido por outra pessoa</option>
+            <option value="Reclamação ou conflito">Reclamação ou conflito</option>
+            <option value="Ausência ou indisponibilidade">Ausência ou indisponibilidade</option>
+            <option value="Outro">Outro</option>
+          </select>
+        </label>
+        <label id="handoff-reason-detail-field" class="is-hidden">
+          Detalhe do motivo
+          <textarea id="handoff-reason-detail" rows="3" maxlength="500" placeholder="Explique brevemente"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-handoff>Cancelar</button>
+          <button id="handoff-confirm" type="submit" class="button button-primary">Confirmar encaminhamento</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="archive-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-archive></div>
+      <form id="archive-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">SEGURANÇA</p>
+            <h2>Arquivar oportunidade?</h2>
+            <p id="archive-description" class="muted">O card sairá da rotina diária, mas o histórico será preservado.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-archive aria-label="Fechar">×</button>
+        </div>
+        <div class="archive-warning">Esta ação não apaga a conversa no Chatwoot. A oportunidade poderá ser restaurada.</div>
+        <label>
+          Motivo do arquivamento
+          <select id="archive-reason" required>
+            <option value="">Selecione o motivo</option>
+            <option value="Lead de teste">Lead de teste</option>
+            <option value="Duplicado">Duplicado</option>
+            <option value="Cadastro incorreto">Cadastro incorreto</option>
+            <option value="Sem valor operacional">Sem valor operacional</option>
+            <option value="Outro">Outro</option>
+          </select>
+        </label>
+        <label>
+          Observação opcional
+          <textarea id="archive-note" rows="3" maxlength="500" placeholder="Contexto para futura consulta"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-archive>Cancelar</button>
+          <button id="archive-confirm" type="submit" class="button button-danger">Arquivar oportunidade</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="redistribution-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-redistribution></div>
+      <form id="redistribution-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">REDISTRIBUIÇÃO</p>
+            <h2>Resolver solicitação</h2>
+            <p id="redistribution-description" class="muted"></p>
+          </div>
+          <button type="button" class="icon-button" data-close-redistribution aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Novo responsável
+          <select id="redistribution-target"></select>
+        </label>
+        <label>
+          Observação da gestão
+          <textarea id="redistribution-note" rows="3" maxlength="500"></textarea>
+        </label>
+        <div class="modal-actions modal-actions-split">
+          <button id="redistribution-reject" type="button" class="button button-danger">Rejeitar</button>
+          <div>
+            <button type="button" class="button button-ghost" data-close-redistribution>Cancelar</button>
+            <button id="redistribution-approve" type="submit" class="button button-primary">Aprovar e transferir</button>
+          </div>
         </div>
       </form>
     </div>

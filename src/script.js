@@ -16,6 +16,7 @@ const STORAGE_KEYS = {
 };
 
 const PAGE_SIZE = 25;
+const PIPELINE_COLUMN_PAGE_SIZE = 50;
 const INTERVENTION_LABELS = new Set(["precisa-humano", "atendimento-manual"]);
 
 const state = {
@@ -26,6 +27,10 @@ const state = {
   users: [],
   audit: [],
   conversations: [],
+  archivedConversations: [],
+  presence: [],
+  handoffTargets: [],
+  transferRequests: [],
   agents: [],
   teams: [],
   inboxes: [],
@@ -57,6 +62,22 @@ const state = {
   organizationConversationCount: 0,
   currentMessages: [],
   showSystemEvents: false,
+  pipelinePeriod: "7d",
+  pipelinePeriodStart: "",
+  pipelinePeriodEnd: "",
+  historyType: "all",
+  historyPeriod: "30d",
+  historyPeriodStart: "",
+  historyPeriodEnd: "",
+  historyLimit: PIPELINE_COLUMN_PAGE_SIZE,
+  archiveLimit: PIPELINE_COLUMN_PAGE_SIZE,
+  columnLimits: {},
+  pendingHandoffConversationId: null,
+  pendingArchiveConversationId: null,
+  pendingRedistributionRequestId: null,
+  presenceTimer: null,
+  monthlySalesGoal: { enabled: false, targetSales: 0 },
+  monthlySalesGoalProgress: { enabled: false, targetSales: 0, currentSales: 0, percentage: 0 },
 };
 
 const elements = {};
@@ -337,6 +358,52 @@ function getConversationStage(conversation) {
   return "new";
 }
 
+function isTerminalConversation(conversation) {
+  return ["won", "lost"].includes(getConversationStage(conversation));
+}
+
+function outcomeTimestamp(conversation) {
+  const attributes = getCustomAttributes(conversation);
+  const explicit = Date.parse(String(attributes.crm_outcome_at || ""));
+  if (Number.isFinite(explicit)) return explicit;
+  return conversationActivityTimestamp(conversation);
+}
+
+function startOfDay(timestamp = Date.now()) {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function periodBounds(period, customStart = "", customEnd = "") {
+  const now = Date.now();
+  const todayStart = startOfDay(now);
+  if (period === "all") return { start: -Infinity, end: Infinity };
+  if (period === "today") return { start: todayStart, end: todayStart + 24 * 60 * 60 * 1000 - 1 };
+  if (period === "7d") return { start: todayStart - 6 * 24 * 60 * 60 * 1000, end: Infinity };
+  if (period === "30d") return { start: todayStart - 29 * 24 * 60 * 60 * 1000, end: Infinity };
+  if (period === "month") {
+    const date = new Date(now);
+    return { start: new Date(date.getFullYear(), date.getMonth(), 1).getTime(), end: Infinity };
+  }
+  if (period === "custom") {
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(customStart)
+      ? Date.parse(`${customStart}T00:00:00`)
+      : -Infinity;
+    const end = /^\d{4}-\d{2}-\d{2}$/.test(customEnd)
+      ? Date.parse(`${customEnd}T23:59:59`)
+      : Infinity;
+    return { start, end };
+  }
+  return { start: -Infinity, end: Infinity };
+}
+
+function matchesPeriod(conversation, period, customStart = "", customEnd = "") {
+  const timestamp = outcomeTimestamp(conversation);
+  const bounds = periodBounds(period, customStart, customEnd);
+  return timestamp >= bounds.start && timestamp <= bounds.end;
+}
+
 function getLastMessage(conversation) {
   if (conversation?.last_non_activity_message?.content) {
     return conversation.last_non_activity_message.content;
@@ -561,6 +628,7 @@ async function loadCentralConfiguration(options = {}) {
   applySessionPayload(config);
   state.pipelineStages = normalizePipelineStages(config.pipeline?.stages || cloneDefaultStages());
   state.filterPresets = Array.isArray(config.filterPresets) ? config.filterPresets : [];
+  state.monthlySalesGoal = config.monthlySalesGoal || { enabled: false, targetSales: 0 };
   if (!options.skipLegacyMigration) await maybeMigrateLegacyConfiguration();
   if (!state.filterPresets.some((item) => item.id === state.activeFilterPresetId)) {
     state.activeFilterPresetId = "";
@@ -602,11 +670,15 @@ function renderIdentity() {
   elements.pipelineSettingsPanel?.classList.toggle("is-readonly", !hasPermission("pipeline:manage"));
   elements.userManagementPanel?.classList.toggle("is-hidden", !hasPermission("users:manage"));
   elements.auditPanel?.classList.toggle("is-hidden", !hasPermission("audit:read"));
+  elements.monthlyGoalSettingsPanel?.classList.toggle("is-hidden", !hasPermission("goals:manage"));
+  renderMonthlyGoalSettings();
   elements.bootstrapCrm.disabled = !hasPermission("pipeline:manage");
   elements.managePipeline.disabled = !hasPermission("pipeline:manage");
   elements.saveOpportunity.disabled = !hasPermission("opportunities:write");
   if (elements.saveLabels) elements.saveLabels.disabled = !hasPermission("opportunities:write");
   elements.replySubmit.disabled = !hasPermission("messages:send");
+  updateArchiveNavigation();
+  renderPresence();
 }
 
 function roleLabel(role) {
@@ -701,6 +773,10 @@ async function logout() {
     state.user = null;
     state.permissions = [];
     state.conversations = [];
+    state.archivedConversations = [];
+    state.presence = [];
+    state.handoffTargets = [];
+    state.transferRequests = [];
     showLogin();
   }
 }
@@ -720,18 +796,36 @@ async function loadWorkspace(options = {}) {
       await loadCentralConfiguration({ skipRender: true });
       renderIdentity();
     }
-    const [conversationResult, agents, teams, inboxData, labelsData] = await Promise.all([
+    const canManageTransfers = hasPermission("transfer_requests:manage");
+    const [
+      conversationResult,
+      agents,
+      teams,
+      inboxData,
+      labelsData,
+      presenceData,
+      handoffData,
+      transferData,
+    ] = await Promise.all([
       fetchAllConversations(),
       apiRequest(`/api/v1/accounts/${state.accountId}/agents`).catch(() => []),
       apiRequest(`/api/v1/accounts/${state.accountId}/teams`).catch(() => []),
       apiRequest(`/api/v1/accounts/${state.accountId}/inboxes`).catch(() => ({ payload: [] })),
       apiRequest(`/api/v1/accounts/${state.accountId}/labels`).catch(() => ({ payload: [] })),
+      apiRequest("/api/crm/presence").catch(() => ({ presence: [] })),
+      apiRequest("/api/crm/handoff/targets").catch(() => ({ targets: [] })),
+      canManageTransfers
+        ? apiRequest("/api/crm/transfer-requests?status=pending").catch(() => ({ requests: [] }))
+        : Promise.resolve({ requests: [] }),
     ]);
 
     const conversations = Array.isArray(conversationResult?.conversations)
       ? conversationResult.conversations
       : [];
     state.conversations = sortOperationalQueue(conversations);
+    state.archivedConversations = Array.isArray(conversationResult?.archivedConversations)
+      ? conversationResult.archivedConversations
+      : [];
     state.interventionCount = Number(conversationResult?.interventionCount || 0);
     state.organizationConversationCount = Number(
       conversationResult?.totalOrganization || conversations.length
@@ -740,9 +834,19 @@ async function loadWorkspace(options = {}) {
     state.teams = Array.isArray(teams) ? teams : teams?.payload || [];
     state.inboxes = Array.isArray(inboxData) ? inboxData : inboxData?.payload || [];
     state.labels = Array.isArray(labelsData) ? labelsData : labelsData?.payload || [];
+    state.presence = Array.isArray(presenceData?.presence) ? presenceData.presence : [];
+    state.handoffTargets = Array.isArray(handoffData?.targets) ? handoffData.targets : [];
+    state.transferRequests = Array.isArray(transferData?.requests) ? transferData.requests : [];
+    state.monthlySalesGoalProgress = conversationResult?.monthlySalesGoalProgress || {
+      ...state.monthlySalesGoal,
+      currentSales: 0,
+      percentage: 0,
+    };
 
     if (hasPermission("users:manage")) renderUsers();
     renderIdentity();
+    renderPresence();
+    renderTransferRequests();
     populateFilterOptions();
     populateDrawerOptions();
     populateUserAgentOptions();
@@ -820,14 +924,121 @@ function filteredConversations() {
   });
 }
 
+function pipelineFilteredConversations() {
+  return filteredConversations().filter((conversation) => {
+    if (!isTerminalConversation(conversation)) return true;
+    return matchesPeriod(
+      conversation,
+      state.pipelinePeriod,
+      state.pipelinePeriodStart,
+      state.pipelinePeriodEnd
+    );
+  });
+}
+
+function historyConversations() {
+  return filteredConversations()
+    .filter(isTerminalConversation)
+    .filter((conversation) => state.historyType === "all" || getConversationStage(conversation) === state.historyType)
+    .filter((conversation) => matchesPeriod(
+      conversation,
+      state.historyPeriod,
+      state.historyPeriodStart,
+      state.historyPeriodEnd
+    ))
+    .sort((a, b) => outcomeTimestamp(b) - outcomeTimestamp(a));
+}
+
+function archivedSearchResults() {
+  const search = safeLower(state.search.trim());
+  if (!search) return [...state.archivedConversations];
+  return state.archivedConversations.filter((conversation) => {
+    const sender = getSender(conversation);
+    const archive = conversation.crm_archive || {};
+    return [
+      sender.name,
+      sender.phone_number,
+      sender.email,
+      conversation.id,
+      archive.reason,
+      archive.note,
+      getLastMessage(conversation),
+    ].map(safeLower).join(" ").includes(search);
+  });
+}
+
 function renderAll() {
   renderDashboard();
   renderInterventions();
+  renderTransferRequests();
   renderPipeline();
+  renderHistory();
+  renderArchive();
   renderConversationsTable();
   renderTasks();
   renderContacts();
+  renderPresence();
   updateInterventionNavigation();
+  updateArchiveNavigation();
+}
+
+function monthlyGoalMessage(progress) {
+  if (progress.achieved) return "Meta alcançada! Agora é ampliar o resultado.";
+  const percentage = Number(progress.percentage || 0);
+  if (percentage >= 75) return "Reta final: falta pouco para bater a meta.";
+  if (percentage >= 50) return "Metade do caminho concluída. Mantenham o ritmo.";
+  if (percentage >= 25) return "A meta está ganhando ritmo.";
+  return "Cada venda aproxima a equipe da meta do mês.";
+}
+
+function renderMonthlySalesGoal() {
+  const card = elements.monthlySalesGoalCard;
+  if (!card) return;
+  const progress = state.monthlySalesGoalProgress || {};
+  const enabled = progress.enabled === true && Number(progress.targetSales || 0) > 0;
+  card.classList.toggle("is-hidden", !enabled);
+  if (!enabled) return;
+  const percentage = Math.max(0, Number(progress.percentage || 0));
+  const visualPercentage = Math.min(100, percentage);
+  elements.monthlySalesGoalTitle.textContent = `Meta mensal · ${state.organization?.name || "Loja"}`;
+  elements.monthlySalesGoalPeriod.textContent = `Período: ${progress.periodStart || "—"} a ${progress.periodEnd || "—"}`;
+  elements.monthlySalesGoalScore.textContent = `${Number(progress.currentSales || 0)} / ${Number(progress.targetSales || 0)}`;
+  elements.monthlySalesGoalFill.style.width = `${visualPercentage}%`;
+  elements.monthlySalesGoalFill.classList.toggle("is-achieved", progress.achieved === true);
+  elements.monthlySalesGoalPercentage.textContent = `${percentage.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+  elements.monthlySalesGoalMessage.textContent = monthlyGoalMessage(progress);
+  const track = elements.monthlySalesGoalFill.parentElement;
+  track?.setAttribute("aria-valuenow", String(Math.min(100, Math.round(percentage))));
+}
+
+function renderMonthlyGoalSettings() {
+  if (!elements.monthlyGoalEnabled || !elements.monthlyGoalTarget) return;
+  const goal = state.monthlySalesGoal || { enabled: false, targetSales: 0 };
+  elements.monthlyGoalEnabled.checked = goal.enabled === true;
+  elements.monthlyGoalTarget.value = Number(goal.targetSales || 0) > 0 ? String(goal.targetSales) : "";
+  elements.monthlyGoalTarget.disabled = !elements.monthlyGoalEnabled.checked;
+}
+
+async function saveMonthlyGoalSettings(event) {
+  event.preventDefault();
+  const enabled = elements.monthlyGoalEnabled.checked;
+  const targetSales = Number(elements.monthlyGoalTarget.value || 0);
+  elements.monthlyGoalSettingsResult.textContent = "Salvando meta mensal...";
+  try {
+    const response = await apiRequest("/api/crm/settings/monthly-sales-goal", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled, targetSales }),
+    });
+    state.monthlySalesGoal = response.monthlySalesGoal || { enabled, targetSales };
+    renderMonthlyGoalSettings();
+    elements.monthlyGoalSettingsResult.textContent = enabled
+      ? "Meta mensal ativada. O progresso aparecerá no Dashboard."
+      : "Meta mensal desativada. A configuração foi preservada.";
+    await loadWorkspace({ background: true, skipCentralReload: true });
+    showToast(enabled ? "Meta mensal ativada." : "Meta mensal desativada.", "success");
+  } catch (error) {
+    elements.monthlyGoalSettingsResult.textContent = `Erro: ${error.message}`;
+  }
 }
 
 function renderDashboard() {
@@ -892,6 +1103,7 @@ function renderDashboard() {
     elements.metricsGrid.appendChild(card);
   }
 
+  renderMonthlySalesGoal();
   renderStageOverview(conversations);
   renderDashboardTasks(pendingTasks);
   renderRecentConversations(conversations);
@@ -1104,7 +1316,7 @@ async function resolveIntervention(conversationId) {
 }
 
 function renderPipeline() {
-  const conversations = filteredConversations();
+  const conversations = pipelineFilteredConversations();
   elements.pipelineBoard.replaceChildren();
   elements.pipelineResultCount.textContent = `${conversations.length} ${
     conversations.length === 1 ? "oportunidade exibida" : "oportunidades exibidas"
@@ -1144,6 +1356,8 @@ function renderPipeline() {
       (sum, conversation) => sum + parseCurrency(getCustomAttributes(conversation).crm_value),
       0
     );
+    const currentLimit = Number(state.columnLimits[stage.id] || PIPELINE_COLUMN_PAGE_SIZE);
+    const visibleConversations = stageConversations.slice(0, currentLimit);
 
     const column = createElement(
       "section",
@@ -1164,11 +1378,23 @@ function renderPipeline() {
 
     const list = createElement("div", "pipeline-list");
     list.dataset.stage = stage.id;
-    for (const conversation of stageConversations) {
+    for (const conversation of visibleConversations) {
       list.appendChild(createOpportunityCard(conversation));
     }
     if (!stageConversations.length) {
       list.appendChild(createElement("div", "pipeline-empty", "Nenhuma oportunidade nesta etapa"));
+    } else if (visibleConversations.length < stageConversations.length) {
+      const more = createElement(
+        "button",
+        "pipeline-load-more",
+        `Mostrar mais ${Math.min(PIPELINE_COLUMN_PAGE_SIZE, stageConversations.length - visibleConversations.length)}`
+      );
+      more.type = "button";
+      more.addEventListener("click", () => {
+        state.columnLimits[stage.id] = currentLimit + PIPELINE_COLUMN_PAGE_SIZE;
+        renderPipeline();
+      });
+      list.appendChild(more);
     }
 
     if (hasPermission("opportunities:write") && !stage.virtual) {
@@ -1296,7 +1522,7 @@ function createOpportunityCard(conversation) {
   const quickActions = createElement("div", "card-quick-actions");
   const quickDefinitions = [
     ["task", "✓", "Criar ou editar tarefa"],
-    ["assignee", "👤", "Alterar responsável"],
+    ["assignee", "👤", "Encaminhar atendimento"],
     ["won", "★", "Marcar como ganho"],
     ["lost", "×", "Marcar como perdido"],
     ["chatwoot", "↗", "Abrir no Chatwoot"],
@@ -1313,13 +1539,28 @@ function createOpportunityCard(conversation) {
       event.preventDefault();
       event.stopPropagation();
       if (action === "task") return openOpportunityDrawer(conversation.id, { focus: "task" });
-      if (action === "assignee") return openOpportunityDrawer(conversation.id, { focus: "assignee" });
+      if (action === "assignee") {
+        openOpportunityDrawer(conversation.id);
+        return window.setTimeout(() => openHandoffModal(conversation.id), 80);
+      }
       if (action === "won" || action === "lost") {
         return requestStageTransition(conversation.id, action);
       }
       if (action === "chatwoot") return openInChatwootById(conversation.id);
     });
     quickActions.appendChild(button);
+  }
+  if (hasPermission("archive:manage")) {
+    const archive = createElement("button", "card-quick-action action-archive", "⌑");
+    archive.type = "button";
+    archive.title = "Arquivar oportunidade";
+    archive.addEventListener("mousedown", (event) => event.stopPropagation());
+    archive.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openArchiveModal(conversation.id);
+    });
+    quickActions.appendChild(archive);
   }
   if (isIntervention(conversation) && hasPermission("interventions:manage")) {
     const assume = createElement("button", "card-intervention-action", "Assumir");
@@ -1429,7 +1670,8 @@ async function moveOpportunity(conversationId, stageId, extras = {}) {
   renderAll();
 
   try {
-    await updateCustomAttributes(conversationId, nextAttributes);
+    const response = await updateCustomAttributes(conversationId, nextAttributes);
+    conversation.custom_attributes = response?.effectiveCustomAttributes || nextAttributes;
     showToast(`Oportunidade movida para ${getStage(stageId).label}.`, "success");
     return true;
   } catch (error) {
@@ -1705,10 +1947,14 @@ function fillSelect(select, items, placeholder) {
   }
 }
 
-function drawerConversation() {
-  return state.conversations.find(
-    (conversation) => Number(conversation.id) === Number(state.currentConversationId)
+function findConversationById(conversationId) {
+  return [...state.conversations, ...state.archivedConversations].find(
+    (conversation) => Number(conversation.id) === Number(conversationId)
   );
+}
+
+function drawerConversation() {
+  return findConversationById(state.currentConversationId);
 }
 
 function allDrawerLabelDefinitions(conversation) {
@@ -1854,7 +2100,7 @@ async function saveDrawerLabels() {
 }
 
 async function openOpportunityDrawer(conversationId, options = {}) {
-  const conversation = state.conversations.find((item) => Number(item.id) === Number(conversationId));
+  const conversation = findConversationById(conversationId);
   if (!conversation) return;
 
   state.currentConversationId = Number(conversationId);
@@ -1880,8 +2126,10 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   elements.drawerTaskDone.checked = isTrue(attributes.crm_task_done);
   elements.drawerTaskCompletedAt.dataset.value = attributes.crm_task_completed_at || "";
   elements.drawerLossReason.value = attributes.crm_loss_reason || "";
-  const canWrite = hasPermission("opportunities:write");
-  const canAssign = hasPermission("assignments:manage");
+  const archived = Boolean(conversation.crm_archive);
+  const canWrite = hasPermission("opportunities:write") && !archived;
+  const canAssignDirectly = hasPermission("assignments:manage") && ["admin", "manager"].includes(state.user?.operationalRole);
+  const canUseControlledHandoff = ["admin", "manager", "sdr", "seller"].includes(state.user?.operationalRole);
   elements.drawerInterventionPanel.classList.toggle("is-hidden", !isIntervention(conversation));
   if (isIntervention(conversation)) {
     const labels = interventionLabels(conversation);
@@ -1907,12 +2155,20 @@ async function openOpportunityDrawer(conversationId, options = {}) {
   ].forEach((element) => {
     element.disabled = !canWrite;
   });
-  elements.drawerAssignee.disabled = !canAssign;
-  elements.drawerTeam.disabled = !canAssign;
+  elements.drawerAssignee.disabled = !canAssignDirectly;
+  elements.drawerTeam.disabled = !canAssignDirectly;
+  elements.drawerHandoffPanel?.classList.toggle("is-hidden", !canUseControlledHandoff);
+  elements.openHandoff.disabled = !canUseControlledHandoff;
+  elements.drawerHandoffHelper.textContent = ["admin", "manager"].includes(state.user?.operationalRole)
+    ? "A gestão pode transferir para qualquer usuário operacional ativo."
+    : state.user?.operationalRole === "sdr"
+      ? "Encaminhe para um vendedor ou escale para a gestão."
+      : "Devolva para a SDR, escale para a gestão ou solicite redistribuição.";
+  elements.archiveOpportunity.classList.toggle("is-hidden", !hasPermission("archive:manage") || Boolean(conversation.crm_archive));
   elements.saveOpportunity.disabled = !canWrite;
-  elements.replyContent.disabled = !hasPermission("messages:send");
-  elements.replyPrivate.disabled = !hasPermission("messages:send");
-  elements.replySubmit.disabled = !hasPermission("messages:send");
+  elements.replyContent.disabled = !hasPermission("messages:send") || archived;
+  elements.replyPrivate.disabled = !hasPermission("messages:send") || archived;
+  elements.replySubmit.disabled = !hasPermission("messages:send") || archived;
   toggleLossReason();
   updateDrawerTaskState();
 
@@ -1931,8 +2187,8 @@ async function openOpportunityDrawer(conversationId, options = {}) {
     elements.drawerTask.focus();
     elements.drawerTask.scrollIntoView({ behavior: "smooth", block: "center" });
   } else if (options.focus === "assignee") {
-    elements.drawerAssignee.focus();
-    elements.drawerAssignee.scrollIntoView({ behavior: "smooth", block: "center" });
+    elements.openHandoff.focus();
+    elements.openHandoff.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }
 
@@ -2227,7 +2483,8 @@ async function saveOpportunity() {
       crm_loss_reason: elements.drawerStage.value === "lost" ? elements.drawerLossReason.value.trim() : "",
     };
 
-    await updateCustomAttributes(conversationId, customAttributes);
+    const attributeResponse = await updateCustomAttributes(conversationId, customAttributes);
+    const effectiveCustomAttributes = attributeResponse?.effectiveCustomAttributes || customAttributes;
 
     const priority = elements.drawerPriority.value;
     if ((conversation.priority || "none") !== priority) {
@@ -2244,6 +2501,7 @@ async function saveOpportunity() {
 
     if (
       hasPermission("assignments:manage") &&
+      ["admin", "manager"].includes(state.user?.operationalRole) &&
       (selectedAssignee !== currentAssigneeId || (!selectedAssignee && selectedTeam !== currentTeamId))
     ) {
       const assignment = {};
@@ -2260,7 +2518,7 @@ async function saveOpportunity() {
       );
     }
 
-    conversation.custom_attributes = customAttributes;
+    conversation.custom_attributes = effectiveCustomAttributes;
     conversation.priority = priority;
     conversation.meta = conversation.meta || {};
     conversation.meta.assignee = selectedAssignee
@@ -2395,7 +2653,13 @@ async function bootstrapCrm() {
 }
 
 function currentFilterSnapshot() {
-  return { search: state.search, filters: { ...state.filters } };
+  return {
+    search: state.search,
+    filters: { ...state.filters },
+    pipelinePeriod: state.pipelinePeriod,
+    pipelinePeriodStart: state.pipelinePeriodStart,
+    pipelinePeriodEnd: state.pipelinePeriodEnd,
+  };
 }
 
 function persistFilterPresets() {
@@ -2416,6 +2680,9 @@ function restoreActiveFilterPreset() {
   }
   state.search = preset.search || "";
   state.filters = { ...state.filters, ...(preset.filters || {}) };
+  state.pipelinePeriod = preset.pipelinePeriod || "7d";
+  state.pipelinePeriodStart = preset.pipelinePeriodStart || "";
+  state.pipelinePeriodEnd = preset.pipelinePeriodEnd || "";
   elements.globalSearch.value = state.search;
   elements.filterAssignee.value = state.filters.assignee || "";
   elements.filterTeam.value = state.filters.team || "";
@@ -2423,6 +2690,10 @@ function restoreActiveFilterPreset() {
   elements.filterLabel.value = state.filters.label || "";
   elements.filterPriority.value = state.filters.priority || "";
   elements.filterTaskStatus.value = state.filters.taskStatus || "";
+  elements.filterPeriod.value = state.pipelinePeriod;
+  elements.filterPeriodStart.value = state.pipelinePeriodStart;
+  elements.filterPeriodEnd.value = state.pipelinePeriodEnd;
+  elements.customPeriodFields.classList.toggle("is-hidden", state.pipelinePeriod !== "custom");
 }
 
 function renderFilterPresets() {
@@ -2483,6 +2754,9 @@ function applyFilterPreset(presetId) {
   }
   state.search = preset.search || "";
   state.filters = { ...state.filters, ...(preset.filters || {}) };
+  state.pipelinePeriod = preset.pipelinePeriod || "7d";
+  state.pipelinePeriodStart = preset.pipelinePeriodStart || "";
+  state.pipelinePeriodEnd = preset.pipelinePeriodEnd || "";
   elements.globalSearch.value = state.search;
   elements.filterAssignee.value = state.filters.assignee || "";
   elements.filterTeam.value = state.filters.team || "";
@@ -2490,6 +2764,11 @@ function applyFilterPreset(presetId) {
   elements.filterLabel.value = state.filters.label || "";
   elements.filterPriority.value = state.filters.priority || "";
   elements.filterTaskStatus.value = state.filters.taskStatus || "";
+  elements.filterPeriod.value = state.pipelinePeriod;
+  elements.filterPeriodStart.value = state.pipelinePeriodStart;
+  elements.filterPeriodEnd.value = state.pipelinePeriodEnd;
+  elements.customPeriodFields.classList.toggle("is-hidden", state.pipelinePeriod !== "custom");
+  state.columnLimits = {};
   persistFilterPresets();
   renderFilterPresets();
   renderAll();
@@ -2763,8 +3042,14 @@ function renderUsers() {
     const linkedAgent = state.agents.find(
       (agent) => Number(agent.id) === Number(user.chatwootAgentId)
     );
+    const presence = state.presence.find((item) => item.userId === user.id) || { status: "offline" };
+    const title = createElement("strong", "crm-user-name-with-status");
+    title.append(
+      createElement("i", `presence-dot presence-${presence.status}`),
+      document.createTextNode(user.name)
+    );
     info.append(
-      createElement("strong", null, user.name),
+      title,
       createElement(
         "span",
         null,
@@ -2774,6 +3059,13 @@ function renderUsers() {
         "small",
         user.chatwootAgentId ? "linked-agent-ok" : "linked-agent-warning",
         linkedAgent?.name || (user.chatwootAgentId ? `Agente #${user.chatwootAgentId}` : "Sem agente Chatwoot vinculado")
+      ),
+      createElement(
+        "small",
+        `user-presence-label presence-text-${presence.status}`,
+        presence.lastSeenAt
+          ? `${presenceStatusLabel(presence.status)} · última atividade ${formatRelativeTime(presence.lastSeenAt)} atrás`
+          : "Offline · ainda não acessou nesta base"
       )
     );
 
@@ -2903,6 +3195,435 @@ async function updateCrmUser(userId, changes) {
   }
 }
 
+
+function presenceStatusLabel(status) {
+  return { online: "Online", away: "Ausente", offline: "Offline" }[status] || "Offline";
+}
+
+function renderPresence() {
+  if (!elements.sidebarPresenceList) return;
+  elements.sidebarPresenceList.replaceChildren();
+  const order = { online: 0, away: 1, offline: 2 };
+  const members = [...state.presence].sort((a, b) => {
+    const statusDiff = (order[a.status] ?? 3) - (order[b.status] ?? 3);
+    return statusDiff || String(a.name).localeCompare(String(b.name), "pt-BR");
+  });
+  if (!members.length) {
+    elements.sidebarPresenceList.appendChild(createElement("span", "presence-empty", "Sem dados de presença"));
+    return;
+  }
+  for (const member of members) {
+    const row = createElement("div", "presence-row");
+    const dot = createElement("i", `presence-dot presence-${member.status}`);
+    const name = createElement("span", "presence-name", member.name);
+    const status = createElement("small", null, presenceStatusLabel(member.status));
+    row.title = member.lastSeenAt
+      ? `${presenceStatusLabel(member.status)} · última atividade ${formatRelativeTime(member.lastSeenAt)} atrás`
+      : "Ainda não acessou nesta base";
+    row.append(dot, name, status);
+    elements.sidebarPresenceList.appendChild(row);
+  }
+  const current = members.find((member) => member.userId === state.user?.id);
+  if (elements.currentUserStatusDot) {
+    elements.currentUserStatusDot.className = `status-dot presence-${current?.status || "online"}`;
+  }
+}
+
+async function refreshPresence(options = {}) {
+  try {
+    const response = await apiRequest("/api/crm/presence");
+    state.presence = Array.isArray(response?.presence) ? response.presence : [];
+    renderPresence();
+    if (!options.silent) showToast("Presença da equipe atualizada.", "success");
+  } catch (error) {
+    if (!options.silent) showToast(`Não foi possível atualizar a presença: ${error.message}`, "error");
+  }
+}
+
+async function sendPresenceHeartbeat(action = false) {
+  if (!state.user || elements.app.classList.contains("is-hidden")) return;
+  try {
+    await apiRequest("/api/crm/presence/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({ view: state.currentView, action }),
+    });
+  } catch (_error) {
+    // O heartbeat nunca deve interromper a operação do CRM.
+  }
+}
+
+function updateArchiveNavigation() {
+  const canManage = hasPermission("archive:manage");
+  elements.archiveNavItem?.classList.toggle("is-hidden", !canManage);
+}
+
+function renderHistory() {
+  if (!elements.historyList) return;
+  const conversations = historyConversations();
+  elements.historyCount.textContent = String(conversations.length);
+  elements.historyList.replaceChildren();
+  if (!conversations.length) {
+    elements.historyList.appendChild(createElement("div", "empty-state", "Nenhum resultado encontrado neste período."));
+    return;
+  }
+  const visible = conversations.slice(0, state.historyLimit);
+  for (const conversation of visible) {
+    const sender = getSender(conversation);
+    const attributes = getCustomAttributes(conversation);
+    const stage = getConversationStage(conversation);
+    const row = createElement("article", `history-result history-${stage}`);
+    const info = createElement("div", "history-result-main");
+    info.append(
+      createElement("strong", null, sender.name || `Contato #${conversation.id}`),
+      createElement("span", null, `${sender.phone_number || sender.email || "Sem contato"} · Conversa #${conversation.id}`),
+      createElement("small", null, stage === "won"
+        ? `Ganho em ${formatDate(outcomeTimestamp(conversation))}`
+        : `Perdido em ${formatDate(outcomeTimestamp(conversation))}${attributes.crm_loss_reason ? ` · ${attributes.crm_loss_reason}` : ""}`)
+    );
+    const side = createElement("div", "history-result-side");
+    side.append(
+      createElement("span", `history-status history-status-${stage}`, stage === "won" ? "Ganho" : "Perdido"),
+      createElement("strong", null, parseCurrency(attributes.crm_value) ? formatCurrency(parseCurrency(attributes.crm_value)) : "Sem valor")
+    );
+    const open = createElement("button", "button button-ghost button-small", "Abrir");
+    open.type = "button";
+    open.addEventListener("click", () => openOpportunityDrawer(conversation.id));
+    side.appendChild(open);
+    row.append(info, side);
+    elements.historyList.appendChild(row);
+  }
+  if (visible.length < conversations.length) {
+    const more = createElement(
+      "button",
+      "pipeline-load-more history-load-more",
+      `Mostrar mais ${Math.min(PIPELINE_COLUMN_PAGE_SIZE, conversations.length - visible.length)}`
+    );
+    more.type = "button";
+    more.addEventListener("click", () => {
+      state.historyLimit += PIPELINE_COLUMN_PAGE_SIZE;
+      renderHistory();
+    });
+    elements.historyList.appendChild(more);
+  }
+}
+
+function renderArchive() {
+  if (!elements.archiveList) return;
+  const conversations = archivedSearchResults().sort((a, b) => {
+    return Date.parse(b.crm_archive?.archivedAt || "") - Date.parse(a.crm_archive?.archivedAt || "");
+  });
+  elements.archiveCount.textContent = String(conversations.length);
+  elements.archiveList.replaceChildren();
+  if (!hasPermission("archive:manage")) {
+    elements.archiveList.appendChild(createElement("div", "empty-state", "Seu perfil não possui acesso ao arquivo."));
+    return;
+  }
+  if (!conversations.length) {
+    elements.archiveList.appendChild(createElement("div", "empty-state", "Nenhuma oportunidade arquivada."));
+    return;
+  }
+  const visible = conversations.slice(0, state.archiveLimit);
+  for (const conversation of visible) {
+    const sender = getSender(conversation);
+    const archive = conversation.crm_archive || {};
+    const row = createElement("article", "archive-item");
+    const info = createElement("div", "archive-item-info");
+    info.append(
+      createElement("strong", null, sender.name || `Contato #${conversation.id}`),
+      createElement("span", null, `${sender.phone_number || sender.email || "Sem contato"} · #${conversation.id}`),
+      createElement("small", null, `${archive.reason || "Sem motivo"} · arquivado por ${archive.archivedByName || "Sistema"} em ${formatDate(archive.archivedAt)}`)
+    );
+    if (archive.note) info.appendChild(createElement("p", null, archive.note));
+    const actions = createElement("div", "archive-item-actions");
+    const open = createElement("button", "button button-ghost button-small", "Ver histórico");
+    open.type = "button";
+    open.addEventListener("click", () => openOpportunityDrawer(conversation.id));
+    const restore = createElement("button", "button button-primary button-small", "Restaurar");
+    restore.type = "button";
+    restore.addEventListener("click", () => restoreOpportunity(conversation.id));
+    actions.append(open, restore);
+    row.append(info, actions);
+    elements.archiveList.appendChild(row);
+  }
+  if (visible.length < conversations.length) {
+    const more = createElement(
+      "button",
+      "pipeline-load-more archive-load-more",
+      `Mostrar mais ${Math.min(PIPELINE_COLUMN_PAGE_SIZE, conversations.length - visible.length)}`
+    );
+    more.type = "button";
+    more.addEventListener("click", () => {
+      state.archiveLimit += PIPELINE_COLUMN_PAGE_SIZE;
+      renderArchive();
+    });
+    elements.archiveList.appendChild(more);
+  }
+}
+
+function openArchiveModal(conversationId = state.currentConversationId) {
+  if (!hasPermission("archive:manage")) return;
+  const conversation = findConversationById(conversationId);
+  if (!conversation || conversation.crm_archive) return;
+  state.pendingArchiveConversationId = Number(conversationId);
+  const sender = getSender(conversation);
+  elements.archiveDescription.textContent = `${sender.name || `Conversa #${conversation.id}`} · #${conversation.id}. O histórico continuará disponível.`;
+  elements.archiveReason.value = "";
+  elements.archiveNote.value = "";
+  elements.archiveModal.classList.add("is-open");
+  elements.archiveModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+}
+
+function closeArchiveModal() {
+  elements.archiveModal.classList.remove("is-open");
+  elements.archiveModal.setAttribute("aria-hidden", "true");
+  state.pendingArchiveConversationId = null;
+  if (!elements.drawer.classList.contains("is-open")) document.body.style.overflow = "";
+}
+
+async function submitArchive(event) {
+  event.preventDefault();
+  const conversationId = state.pendingArchiveConversationId;
+  const reason = elements.archiveReason.value;
+  const note = elements.archiveNote.value.trim();
+  if (!conversationId || !reason) {
+    showToast("Selecione o motivo do arquivamento.", "error");
+    return;
+  }
+  if (reason === "Outro" && note.length < 3) {
+    showToast("Descreva o motivo do arquivamento no campo de observação.", "error");
+    elements.archiveNote.focus();
+    return;
+  }
+  elements.archiveConfirm.disabled = true;
+  try {
+    await apiRequest(`/api/crm/opportunities/${conversationId}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ reason, note }),
+    });
+    closeArchiveModal();
+    if (state.currentConversationId === conversationId) closeOpportunityDrawer();
+    showToast("Oportunidade arquivada com histórico preservado.", "success");
+    await loadWorkspace({ background: true });
+  } catch (error) {
+    showToast(`Não foi possível arquivar: ${error.message}`, "error");
+  } finally {
+    elements.archiveConfirm.disabled = false;
+  }
+}
+
+async function restoreOpportunity(conversationId) {
+  const confirmed = window.confirm("Restaurar esta oportunidade para o Pipeline ativo?");
+  if (!confirmed) return;
+  try {
+    await apiRequest(`/api/crm/opportunities/${conversationId}/restore`, { method: "POST" });
+    showToast("Oportunidade restaurada.", "success");
+    await loadWorkspace({ background: true });
+  } catch (error) {
+    showToast(`Não foi possível restaurar: ${error.message}`, "error");
+  }
+}
+
+function handoffActionsForRole(role) {
+  if (["admin", "manager"].includes(role)) {
+    return [{ id: "transfer", label: "Transferir para outro responsável" }];
+  }
+  if (role === "sdr") {
+    return [
+      { id: "to_seller", label: "Encaminhar para vendedor" },
+      { id: "to_manager", label: "Escalar para gerente" },
+    ];
+  }
+  if (role === "seller") {
+    return [
+      { id: "return_to_sdr", label: "Devolver para SDR" },
+      { id: "to_manager", label: "Escalar para gerente" },
+      { id: "request_redistribution", label: "Solicitar redistribuição" },
+    ];
+  }
+  return [];
+}
+
+function handoffTargetsForAction(action) {
+  if (action === "to_seller") return state.handoffTargets.filter((target) => target.operationalRole === "seller");
+  if (action === "return_to_sdr") return state.handoffTargets.filter((target) => target.operationalRole === "sdr");
+  if (action === "to_manager") return state.handoffTargets.filter((target) => ["manager", "admin"].includes(target.operationalRole));
+  return state.handoffTargets;
+}
+
+function renderHandoffTargetOptions() {
+  const action = elements.handoffAction.value;
+  const requiresTarget = action !== "request_redistribution";
+  elements.handoffTargetField.classList.toggle("is-hidden", !requiresTarget);
+  elements.handoffTarget.required = requiresTarget;
+  elements.handoffTarget.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = requiresTarget ? "Selecione o destino" : "Gestão definirá o destino";
+  elements.handoffTarget.appendChild(empty);
+  for (const target of handoffTargetsForAction(action)) {
+    const option = document.createElement("option");
+    option.value = String(target.chatwootAgentId);
+    option.textContent = `${target.name} · ${roleLabel(target.operationalRole)}`;
+    elements.handoffTarget.appendChild(option);
+  }
+}
+
+function openHandoffModal(conversationId = state.currentConversationId) {
+  const actions = handoffActionsForRole(state.user?.operationalRole);
+  if (!actions.length) {
+    showToast("Seu perfil não possui opções de encaminhamento.", "error");
+    return;
+  }
+  const conversation = findConversationById(conversationId);
+  if (!conversation || conversation.crm_archive) return;
+  state.pendingHandoffConversationId = Number(conversationId);
+  const sender = getSender(conversation);
+  elements.handoffDescription.textContent = `${sender.name || `Conversa #${conversation.id}`} · #${conversation.id}`;
+  elements.handoffAction.replaceChildren();
+  for (const action of actions) {
+    const option = document.createElement("option");
+    option.value = action.id;
+    option.textContent = action.label;
+    elements.handoffAction.appendChild(option);
+  }
+  elements.handoffReasonSelect.value = "";
+  elements.handoffReasonDetail.value = "";
+  elements.handoffReasonDetailField.classList.add("is-hidden");
+  renderHandoffTargetOptions();
+  elements.handoffModal.classList.add("is-open");
+  elements.handoffModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+}
+
+function closeHandoffModal() {
+  elements.handoffModal.classList.remove("is-open");
+  elements.handoffModal.setAttribute("aria-hidden", "true");
+  state.pendingHandoffConversationId = null;
+  if (!elements.drawer.classList.contains("is-open")) document.body.style.overflow = "";
+}
+
+async function submitHandoff(event) {
+  event.preventDefault();
+  const conversationId = state.pendingHandoffConversationId;
+  const action = elements.handoffAction.value;
+  const targetAgentId = elements.handoffTarget.value ? Number(elements.handoffTarget.value) : null;
+  const selectedReason = elements.handoffReasonSelect.value;
+  const detail = elements.handoffReasonDetail.value.trim();
+  const reason = selectedReason === "Outro" ? detail : selectedReason;
+  if (!conversationId || !action || !reason || (action !== "request_redistribution" && !targetAgentId)) {
+    showToast("Preencha a ação, o destino e o motivo.", "error");
+    return;
+  }
+  elements.handoffConfirm.disabled = true;
+  try {
+    const result = await apiRequest(`/api/crm/opportunities/${conversationId}/handoff`, {
+      method: "POST",
+      body: JSON.stringify({ action, targetAgentId, reason }),
+    });
+    closeHandoffModal();
+    if (result?.requested) {
+      showToast("Solicitação de redistribuição enviada à gestão.", "success");
+    } else {
+      showToast("Encaminhamento concluído e registrado.", "success");
+      if (state.currentConversationId === conversationId) closeOpportunityDrawer();
+    }
+    await loadWorkspace({ background: true });
+  } catch (error) {
+    showToast(`Não foi possível encaminhar: ${error.message}`, "error");
+  } finally {
+    elements.handoffConfirm.disabled = false;
+  }
+}
+
+function renderTransferRequests() {
+  if (!elements.transferRequestsPanel || !elements.transferRequestList) return;
+  const canManage = hasPermission("transfer_requests:manage");
+  elements.transferRequestsPanel.classList.toggle("is-hidden", !canManage);
+  if (!canManage) return;
+  elements.transferRequestCount.textContent = String(state.transferRequests.length);
+  elements.transferRequestList.replaceChildren();
+  if (!state.transferRequests.length) {
+    elements.transferRequestList.appendChild(createElement("div", "empty-state", "Nenhuma solicitação pendente."));
+    return;
+  }
+  for (const request of state.transferRequests) {
+    const conversation = findConversationById(request.conversationId);
+    const sender = getSender(conversation || {});
+    const row = createElement("article", "transfer-request-item");
+    const info = createElement("div", "transfer-request-info");
+    info.append(
+      createElement("strong", null, sender.name || `Conversa #${request.conversationId}`),
+      createElement("span", null, `Solicitado por ${request.requesterName} · ${formatDate(request.createdAt)}`),
+      createElement("small", null, request.reason)
+    );
+    const button = createElement("button", "button button-primary button-small", "Distribuir");
+    button.type = "button";
+    button.addEventListener("click", () => openRedistributionModal(request.id));
+    row.append(info, button);
+    elements.transferRequestList.appendChild(row);
+  }
+}
+
+function openRedistributionModal(requestId) {
+  const request = state.transferRequests.find((item) => item.id === requestId);
+  if (!request) return;
+  state.pendingRedistributionRequestId = requestId;
+  elements.redistributionDescription.textContent = `Conversa #${request.conversationId} · ${request.requesterName}: ${request.reason}`;
+  elements.redistributionTarget.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Selecione o novo responsável";
+  elements.redistributionTarget.appendChild(empty);
+  for (const target of state.handoffTargets) {
+    const option = document.createElement("option");
+    option.value = String(target.chatwootAgentId);
+    option.textContent = `${target.name} · ${roleLabel(target.operationalRole)}`;
+    elements.redistributionTarget.appendChild(option);
+  }
+  elements.redistributionNote.value = "";
+  elements.redistributionModal.classList.add("is-open");
+  elements.redistributionModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+}
+
+function closeRedistributionModal() {
+  elements.redistributionModal.classList.remove("is-open");
+  elements.redistributionModal.setAttribute("aria-hidden", "true");
+  state.pendingRedistributionRequestId = null;
+  document.body.style.overflow = "";
+}
+
+async function resolveRedistribution(decision) {
+  const requestId = state.pendingRedistributionRequestId;
+  const targetAgentId = Number(elements.redistributionTarget.value || 0);
+  if (!requestId) return;
+  if (decision === "approved" && !targetAgentId) {
+    showToast("Selecione o novo responsável.", "error");
+    return;
+  }
+  elements.redistributionApprove.disabled = true;
+  elements.redistributionReject.disabled = true;
+  try {
+    await apiRequest(`/api/crm/transfer-requests/${requestId}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({
+        decision,
+        targetAgentId: decision === "approved" ? targetAgentId : null,
+        resolutionNote: elements.redistributionNote.value.trim(),
+      }),
+    });
+    closeRedistributionModal();
+    showToast(decision === "approved" ? "Redistribuição concluída." : "Solicitação rejeitada.", "success");
+    await loadWorkspace({ background: true });
+  } catch (error) {
+    showToast(`Não foi possível resolver a solicitação: ${error.message}`, "error");
+  } finally {
+    elements.redistributionApprove.disabled = false;
+    elements.redistributionReject.disabled = false;
+  }
+}
+
 function auditActionLabel(action) {
   return {
     "session.login": "Entrou no CRM",
@@ -2915,6 +3636,12 @@ function auditActionLabel(action) {
     "user.created": "Criou um usuário",
     "user.updated": "Atualizou um usuário",
     "opportunity.updated": "Atualizou uma oportunidade",
+    "opportunity.archived": "Arquivou uma oportunidade",
+    "opportunity.restored": "Restaurou uma oportunidade",
+    "handoff.completed": "Encaminhou uma oportunidade",
+    "transfer.requested": "Solicitou redistribuição",
+    "transfer.approved": "Aprovou redistribuição",
+    "transfer.rejected": "Rejeitou redistribuição",
     "conversation.labels.updated": "Atualizou etiquetas da conversa",
     "intervention.detected": "Detectou intervenção humana",
     "intervention.assumed": "Assumiu intervenção humana",
@@ -2970,6 +3697,8 @@ function switchView(viewName) {
     dashboard: ["VISÃO GERAL", "Dashboard comercial"],
     interventions: ["AÇÃO IMEDIATA", "Intervenções humanas"],
     pipeline: ["OPORTUNIDADES", "Pipeline de vendas"],
+    history: ["RESULTADOS", "Histórico encerrado"],
+    archive: ["ORGANIZAÇÃO", "Oportunidades arquivadas"],
     conversations: ["ATENDIMENTO", "Conversas do Chatwoot"],
     tasks: ["PRODUTIVIDADE", "Tarefas comerciais"],
     contacts: ["RELACIONAMENTO", "Contatos"],
@@ -2997,6 +3726,16 @@ function clearFilters() {
   elements.filterLabel.value = "";
   elements.filterPriority.value = "";
   elements.filterTaskStatus.value = "";
+  state.pipelinePeriod = "7d";
+  state.pipelinePeriodStart = "";
+  state.pipelinePeriodEnd = "";
+  state.columnLimits = {};
+  state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+  state.archiveLimit = PIPELINE_COLUMN_PAGE_SIZE;
+  elements.filterPeriod.value = "7d";
+  elements.filterPeriodStart.value = "";
+  elements.filterPeriodEnd.value = "";
+  elements.customPeriodFields.classList.add("is-hidden");
   state.activeFilterPresetId = "";
   persistFilterPresets();
   renderFilterPresets();
@@ -3006,6 +3745,7 @@ function clearFilters() {
 function configureAutoRefresh() {
   if (state.refreshTimer) window.clearInterval(state.refreshTimer);
   if (state.syncStatusTimer) window.clearInterval(state.syncStatusTimer);
+  if (state.presenceTimer) window.clearInterval(state.presenceTimer);
 
   state.refreshTimer = window.setInterval(() => {
     if (
@@ -3017,7 +3757,16 @@ function configureAutoRefresh() {
     }
   }, 60000);
 
+  state.presenceTimer = window.setInterval(async () => {
+    if (document.hidden || elements.app.classList.contains("is-hidden")) return;
+    await sendPresenceHeartbeat(false);
+    await refreshPresence({ silent: true });
+  }, 60000);
+
   state.syncStatusTimer = window.setInterval(updateSyncStatus, 15000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) sendPresenceHeartbeat(false);
+  });
 }
 
 function cacheElements() {
@@ -3032,6 +3781,10 @@ function cacheElements() {
     sidebarAccountId: byId("sidebar-account-id"),
     sidebarUserName: byId("sidebar-user-name"),
     sidebarUserRole: byId("sidebar-user-role"),
+    sidebarPresenceList: byId("sidebar-presence-list"),
+    refreshPresence: byId("refresh-presence"),
+    currentUserStatusDot: byId("current-user-status-dot"),
+    archiveNavItem: byId("archive-nav-item"),
     settingsAccountId: byId("settings-account-id"),
     settingsOrganizationName: byId("settings-organization-name"),
     settingsCurrentUser: byId("settings-current-user"),
@@ -3044,9 +3797,19 @@ function cacheElements() {
     lastSync: byId("last-sync"),
     autoRefreshToggle: byId("auto-refresh-toggle"),
     metricsGrid: byId("metrics-grid"),
+    monthlySalesGoalCard: byId("monthly-sales-goal-card"),
+    monthlySalesGoalTitle: byId("monthly-sales-goal-title"),
+    monthlySalesGoalPeriod: byId("monthly-sales-goal-period"),
+    monthlySalesGoalScore: byId("monthly-sales-goal-score"),
+    monthlySalesGoalFill: byId("monthly-sales-goal-fill"),
+    monthlySalesGoalMessage: byId("monthly-sales-goal-message"),
+    monthlySalesGoalPercentage: byId("monthly-sales-goal-percentage"),
     interventionNavCount: byId("intervention-nav-count"),
     interventionViewCount: byId("intervention-view-count"),
     interventionList: byId("intervention-list"),
+    transferRequestsPanel: byId("transfer-requests-panel"),
+    transferRequestCount: byId("transfer-request-count"),
+    transferRequestList: byId("transfer-request-list"),
     stageOverview: byId("stage-overview"),
     dashboardTasks: byId("dashboard-tasks"),
     recentConversations: byId("recent-conversations"),
@@ -3057,6 +3820,10 @@ function cacheElements() {
     filterLabel: byId("filter-label"),
     filterPriority: byId("filter-priority"),
     filterTaskStatus: byId("filter-task-status"),
+    filterPeriod: byId("filter-period"),
+    customPeriodFields: byId("custom-period-fields"),
+    filterPeriodStart: byId("filter-period-start"),
+    filterPeriodEnd: byId("filter-period-end"),
     clearFilters: byId("clear-filters"),
     filterPreset: byId("filter-preset"),
     saveFilterPreset: byId("save-filter-preset"),
@@ -3070,9 +3837,23 @@ function cacheElements() {
     tasksList: byId("tasks-list"),
     contactCount: byId("contact-count"),
     contactsTable: byId("contacts-table"),
+    historyType: byId("history-type"),
+    historyPeriod: byId("history-period"),
+    historyCustomPeriodFields: byId("history-custom-period-fields"),
+    historyPeriodStart: byId("history-period-start"),
+    historyPeriodEnd: byId("history-period-end"),
+    historyCount: byId("history-count"),
+    historyList: byId("history-list"),
+    archiveCount: byId("archive-count"),
+    archiveList: byId("archive-list"),
     bootstrapCrm: byId("bootstrap-crm"),
     bootstrapResult: byId("bootstrap-result"),
     pipelineSettingsPanel: byId("pipeline-settings-panel"),
+    monthlyGoalSettingsPanel: byId("monthly-goal-settings-panel"),
+    monthlyGoalSettingsForm: byId("monthly-goal-settings-form"),
+    monthlyGoalEnabled: byId("monthly-goal-enabled"),
+    monthlyGoalTarget: byId("monthly-goal-target"),
+    monthlyGoalSettingsResult: byId("monthly-goal-settings-result"),
     stageManagerList: byId("stage-manager-list"),
     stageManagerForm: byId("stage-manager-form"),
     newStageName: byId("new-stage-name"),
@@ -3100,6 +3881,9 @@ function cacheElements() {
     drawerInterventionDescription: byId("drawer-intervention-description"),
     assumeIntervention: byId("assume-intervention"),
     resolveIntervention: byId("resolve-intervention"),
+    drawerHandoffPanel: byId("drawer-handoff-panel"),
+    drawerHandoffHelper: byId("drawer-handoff-helper"),
+    openHandoff: byId("open-handoff"),
     drawerStage: byId("drawer-stage"),
     drawerValue: byId("drawer-value"),
     drawerPriority: byId("drawer-priority"),
@@ -3121,6 +3905,7 @@ function cacheElements() {
     cancelLabels: byId("cancel-labels"),
     saveOpportunity: byId("save-opportunity"),
     openChatwoot: byId("open-chatwoot"),
+    archiveOpportunity: byId("archive-opportunity"),
     reloadMessages: byId("reload-messages"),
     toggleSystemEvents: byId("toggle-system-events"),
     messageThread: byId("message-thread"),
@@ -3137,6 +3922,29 @@ function cacheElements() {
     transitionReasonField: byId("transition-reason-field"),
     transitionReason: byId("transition-reason"),
     transitionConfirm: byId("transition-confirm"),
+    handoffModal: byId("handoff-modal"),
+    handoffForm: byId("handoff-form"),
+    handoffDescription: byId("handoff-description"),
+    handoffAction: byId("handoff-action"),
+    handoffTargetField: byId("handoff-target-field"),
+    handoffTarget: byId("handoff-target"),
+    handoffReasonSelect: byId("handoff-reason-select"),
+    handoffReasonDetailField: byId("handoff-reason-detail-field"),
+    handoffReasonDetail: byId("handoff-reason-detail"),
+    handoffConfirm: byId("handoff-confirm"),
+    archiveModal: byId("archive-modal"),
+    archiveForm: byId("archive-form"),
+    archiveDescription: byId("archive-description"),
+    archiveReason: byId("archive-reason"),
+    archiveNote: byId("archive-note"),
+    archiveConfirm: byId("archive-confirm"),
+    redistributionModal: byId("redistribution-modal"),
+    redistributionForm: byId("redistribution-form"),
+    redistributionDescription: byId("redistribution-description"),
+    redistributionTarget: byId("redistribution-target"),
+    redistributionNote: byId("redistribution-note"),
+    redistributionApprove: byId("redistribution-approve"),
+    redistributionReject: byId("redistribution-reject"),
     loadingOverlay: byId("loading-overlay"),
     loadingMessage: byId("loading-message"),
     toastContainer: byId("toast-container"),
@@ -3147,7 +3955,12 @@ function bindEvents() {
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.logoutButton.addEventListener("click", logout);
   elements.refreshButton.addEventListener("click", () => loadWorkspace({ background: false }));
+  elements.refreshPresence?.addEventListener("click", () => refreshPresence({ silent: false }));
   elements.bootstrapCrm.addEventListener("click", bootstrapCrm);
+  elements.monthlyGoalSettingsForm?.addEventListener("submit", saveMonthlyGoalSettings);
+  elements.monthlyGoalEnabled?.addEventListener("change", () => {
+    elements.monthlyGoalTarget.disabled = !elements.monthlyGoalEnabled.checked;
+  });
   elements.clearFilters.addEventListener("click", clearFilters);
   elements.filterPreset.addEventListener("change", () => applyFilterPreset(elements.filterPreset.value));
   elements.saveFilterPreset.addEventListener("click", saveCurrentFilterPreset);
@@ -3172,6 +3985,28 @@ function bindEvents() {
   elements.saveLabels.addEventListener("click", saveDrawerLabels);
   elements.cancelLabels.addEventListener("click", cancelDrawerLabelChanges);
   elements.saveOpportunity.addEventListener("click", saveOpportunity);
+  elements.openHandoff?.addEventListener("click", () => openHandoffModal());
+  elements.archiveOpportunity?.addEventListener("click", () => openArchiveModal());
+  elements.handoffForm?.addEventListener("submit", submitHandoff);
+  elements.handoffAction?.addEventListener("change", renderHandoffTargetOptions);
+  elements.handoffReasonSelect?.addEventListener("change", () => {
+    elements.handoffReasonDetailField.classList.toggle("is-hidden", elements.handoffReasonSelect.value !== "Outro");
+  });
+  document.querySelectorAll("[data-close-handoff]").forEach((element) => {
+    element.addEventListener("click", closeHandoffModal);
+  });
+  elements.archiveForm?.addEventListener("submit", submitArchive);
+  document.querySelectorAll("[data-close-archive]").forEach((element) => {
+    element.addEventListener("click", closeArchiveModal);
+  });
+  elements.redistributionForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    resolveRedistribution("approved");
+  });
+  elements.redistributionReject?.addEventListener("click", () => resolveRedistribution("rejected"));
+  document.querySelectorAll("[data-close-redistribution]").forEach((element) => {
+    element.addEventListener("click", closeRedistributionModal);
+  });
   elements.assumeIntervention.addEventListener("click", () => {
     if (state.currentConversationId) assumeIntervention(state.currentConversationId);
   });
@@ -3197,6 +4032,9 @@ function bindEvents() {
 
   elements.globalSearch.addEventListener("input", () => {
     state.search = elements.globalSearch.value;
+    state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+    state.archiveLimit = PIPELINE_COLUMN_PAGE_SIZE;
+    state.columnLimits = {};
     state.activeFilterPresetId = "";
     persistFilterPresets();
     renderFilterPresets();
@@ -3215,12 +4053,53 @@ function bindEvents() {
   for (const [select, key] of filterBindings) {
     select.addEventListener("change", () => {
       state.filters[key] = select.value;
+      state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+      state.archiveLimit = PIPELINE_COLUMN_PAGE_SIZE;
+      state.columnLimits = {};
       state.activeFilterPresetId = "";
       persistFilterPresets();
       renderFilterPresets();
       renderAll();
     });
   }
+
+  elements.filterPeriod?.addEventListener("change", () => {
+    state.pipelinePeriod = elements.filterPeriod.value;
+    elements.customPeriodFields.classList.toggle("is-hidden", state.pipelinePeriod !== "custom");
+    state.columnLimits = {};
+    renderPipeline();
+  });
+  elements.filterPeriodStart?.addEventListener("change", () => {
+    state.pipelinePeriodStart = elements.filterPeriodStart.value;
+    state.columnLimits = {};
+    renderPipeline();
+  });
+  elements.filterPeriodEnd?.addEventListener("change", () => {
+    state.pipelinePeriodEnd = elements.filterPeriodEnd.value;
+    state.columnLimits = {};
+    renderPipeline();
+  });
+  elements.historyType?.addEventListener("change", () => {
+    state.historyType = elements.historyType.value;
+    state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+    renderHistory();
+  });
+  elements.historyPeriod?.addEventListener("change", () => {
+    state.historyPeriod = elements.historyPeriod.value;
+    elements.historyCustomPeriodFields.classList.toggle("is-hidden", state.historyPeriod !== "custom");
+    state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+    renderHistory();
+  });
+  elements.historyPeriodStart?.addEventListener("change", () => {
+    state.historyPeriodStart = elements.historyPeriodStart.value;
+    state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+    renderHistory();
+  });
+  elements.historyPeriodEnd?.addEventListener("change", () => {
+    state.historyPeriodEnd = elements.historyPeriodEnd.value;
+    state.historyLimit = PIPELINE_COLUMN_PAGE_SIZE;
+    renderHistory();
+  });
 
   document.querySelectorAll("[data-task-view-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3253,6 +4132,12 @@ function bindEvents() {
     if (event.key !== "Escape") return;
     if (elements.transitionModal.classList.contains("is-open")) {
       closeTransitionModal();
+    } else if (elements.handoffModal?.classList.contains("is-open")) {
+      closeHandoffModal();
+    } else if (elements.archiveModal?.classList.contains("is-open")) {
+      closeArchiveModal();
+    } else if (elements.redistributionModal?.classList.contains("is-open")) {
+      closeRedistributionModal();
     } else if (elements.drawer.classList.contains("is-open")) {
       closeOpportunityDrawer();
     }
