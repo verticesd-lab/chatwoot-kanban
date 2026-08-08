@@ -98,3 +98,8 @@ Teste operacional recomendado:
 6. entrar como Vendedor e confirmar que `Gerenciar` não aparece;
 7. desativar o vídeo e confirmar que ele some da área da equipe;
 8. reativar e validar novamente.
+
+
+## Hotfix — YouTube Error 153
+
+O player embutido precisa enviar a origem do CRM ao YouTube. A política global de referrer foi ajustada de `same-origin` para `strict-origin-when-cross-origin`, preservando somente a origem em navegação cross-origin e permitindo a identificação exigida pelo player do YouTube. O iframe também declara a mesma política explicitamente.

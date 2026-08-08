@@ -52,6 +52,8 @@ assert(script.includes("state.archiveLimit += PIPELINE_COLUMN_PAGE_SIZE"));
 assert(styles.includes("CRM V1.3.3 — controle operacional"));
 assert(styles.includes("CRM V1.3.4 — central de tutoriais"));
 assert(server.includes("https://www.youtube-nocookie.com"));
+assert(server.includes('Referrer-Policy", "strict-origin-when-cross-origin'));
+assert(html.includes('referrerpolicy="strict-origin-when-cross-origin"'));
 assert(script.includes("function renderTutorials()"));
 assert(styles.includes("flex-direction: column"));
 assert(styles.includes("border-left: 3px solid #94a3b8"));
