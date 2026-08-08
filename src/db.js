@@ -27,6 +27,7 @@ const ROLE_PERMISSIONS = {
     "archive:manage",
     "transfer_requests:manage",
     "presence:read",
+    "tutorials:manage",
   ],
   manager: [
     "crm:read",
@@ -40,6 +41,7 @@ const ROLE_PERMISSIONS = {
     "archive:manage",
     "transfer_requests:manage",
     "presence:read",
+    "tutorials:manage",
   ],
   agent: ["crm:read", "opportunities:write", "messages:send", "presence:read"],
   viewer: ["crm:read", "presence:read"],
@@ -356,6 +358,26 @@ function createDatabase() {
       FOREIGN KEY (resolved_by_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS tutorial_videos (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      youtube_video_id TEXT NOT NULL,
+      youtube_url TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      category TEXT NOT NULL DEFAULT 'Geral',
+      display_order INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by_user_id TEXT,
+      updated_by_user_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (organization_id, youtube_video_id),
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_stages_pipeline_position ON pipeline_stages(pipeline_id, position);
     CREATE INDEX IF NOT EXISTS idx_filters_org_owner ON filter_presets(organization_id, owner_user_id);
@@ -365,6 +387,7 @@ function createDatabase() {
     CREATE INDEX IF NOT EXISTS idx_presence_org_seen ON user_presence(organization_id, last_seen_at DESC);
     CREATE INDEX IF NOT EXISTS idx_archive_org_active ON archived_opportunities(organization_id, active, archived_at DESC);
     CREATE INDEX IF NOT EXISTS idx_transfer_org_status ON transfer_requests(organization_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_tutorials_org_active_order ON tutorial_videos(organization_id, active, display_order, created_at);
   `);
 
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
@@ -393,6 +416,7 @@ function createDatabase() {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(nowIso());
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?)").run(nowIso());
 
   return { db, databasePath };
 }
@@ -1477,6 +1501,163 @@ function logDirectHandoff({
   });
 }
 
+function tutorialRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    youtubeVideoId: row.youtube_video_id,
+    youtubeUrl: row.youtube_url,
+    title: row.title,
+    description: row.description || "",
+    category: row.category || "Geral",
+    displayOrder: Number(row.display_order) || 0,
+    active: Boolean(row.active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function listTutorialVideos(organizationId, options = {}) {
+  const includeInactive = options.includeInactive === true;
+  const rows = db.prepare(`
+    SELECT *
+    FROM tutorial_videos
+    WHERE organization_id = ?
+      AND (? = 1 OR active = 1)
+    ORDER BY display_order ASC, title COLLATE NOCASE ASC, created_at ASC
+  `).all(organizationId, includeInactive ? 1 : 0);
+  return rows.map(tutorialRow);
+}
+
+function createTutorialVideo({
+  organizationId,
+  actorUserId,
+  youtubeVideoId,
+  youtubeUrl,
+  title,
+  description = "",
+  category = "Geral",
+  displayOrder = 0,
+  active = true,
+}) {
+  const id = crypto.randomUUID();
+  const now = nowIso();
+  try {
+    db.prepare(`
+      INSERT INTO tutorial_videos
+      (id, organization_id, youtube_video_id, youtube_url, title, description, category,
+       display_order, active, created_by_user_id, updated_by_user_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      organizationId,
+      youtubeVideoId,
+      youtubeUrl,
+      title,
+      description || null,
+      category || "Geral",
+      Number(displayOrder) || 0,
+      active ? 1 : 0,
+      actorUserId || null,
+      actorUserId || null,
+      now,
+      now
+    );
+  } catch (error) {
+    if (String(error?.message || "").includes("UNIQUE constraint failed")) {
+      const duplicate = new Error("Este vídeo já está cadastrado nos Tutoriais");
+      duplicate.status = 409;
+      throw duplicate;
+    }
+    throw error;
+  }
+  const created = db.prepare("SELECT * FROM tutorial_videos WHERE id = ?").get(id);
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "tutorial.created",
+    entityType: "tutorial_video",
+    entityId: id,
+    after: tutorialRow(created),
+  });
+  return tutorialRow(created);
+}
+
+function updateTutorialVideo({
+  organizationId,
+  actorUserId,
+  tutorialId,
+  youtubeVideoId,
+  youtubeUrl,
+  title,
+  description = "",
+  category = "Geral",
+  displayOrder = 0,
+  active = true,
+}) {
+  const current = db.prepare(
+    "SELECT * FROM tutorial_videos WHERE id = ? AND organization_id = ?"
+  ).get(tutorialId, organizationId);
+  if (!current) return null;
+  const before = tutorialRow(current);
+  try {
+    db.prepare(`
+      UPDATE tutorial_videos
+      SET youtube_video_id = ?, youtube_url = ?, title = ?, description = ?, category = ?,
+          display_order = ?, active = ?, updated_by_user_id = ?, updated_at = ?
+      WHERE id = ? AND organization_id = ?
+    `).run(
+      youtubeVideoId,
+      youtubeUrl,
+      title,
+      description || null,
+      category || "Geral",
+      Number(displayOrder) || 0,
+      active ? 1 : 0,
+      actorUserId || null,
+      nowIso(),
+      tutorialId,
+      organizationId
+    );
+  } catch (error) {
+    if (String(error?.message || "").includes("UNIQUE constraint failed")) {
+      const duplicate = new Error("Este vídeo já está cadastrado nos Tutoriais");
+      duplicate.status = 409;
+      throw duplicate;
+    }
+    throw error;
+  }
+  const updated = db.prepare("SELECT * FROM tutorial_videos WHERE id = ?").get(tutorialId);
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "tutorial.updated",
+    entityType: "tutorial_video",
+    entityId: tutorialId,
+    before,
+    after: tutorialRow(updated),
+  });
+  return tutorialRow(updated);
+}
+
+function deleteTutorialVideo({ organizationId, actorUserId, tutorialId }) {
+  const current = db.prepare(
+    "SELECT * FROM tutorial_videos WHERE id = ? AND organization_id = ?"
+  ).get(tutorialId, organizationId);
+  if (!current) return false;
+  db.prepare("DELETE FROM tutorial_videos WHERE id = ? AND organization_id = ?")
+    .run(tutorialId, organizationId);
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "tutorial.deleted",
+    entityType: "tutorial_video",
+    entityId: tutorialId,
+    before: tutorialRow(current),
+  });
+  return true;
+}
+
 function closeDatabase() {
   db.close();
 }
@@ -1562,6 +1743,10 @@ module.exports = {
   listTransferRequests,
   resolveTransferRequest,
   logDirectHandoff,
+  listTutorialVideos,
+  createTutorialVideo,
+  updateTutorialVideo,
+  deleteTutorialVideo,
   logAudit,
   listAudit,
   closeDatabase,

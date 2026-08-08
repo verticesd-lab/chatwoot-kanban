@@ -78,6 +78,10 @@ const state = {
   presenceTimer: null,
   monthlySalesGoal: { enabled: false, targetSales: 0 },
   monthlySalesGoalProgress: { enabled: false, targetSales: 0, currentSales: 0, percentage: 0 },
+  tutorials: [],
+  tutorialCategory: "all",
+  tutorialTab: "watch",
+  tutorialLoading: false,
 };
 
 const elements = {};
@@ -671,6 +675,11 @@ function renderIdentity() {
   elements.userManagementPanel?.classList.toggle("is-hidden", !hasPermission("users:manage"));
   elements.auditPanel?.classList.toggle("is-hidden", !hasPermission("audit:read"));
   elements.monthlyGoalSettingsPanel?.classList.toggle("is-hidden", !hasPermission("goals:manage"));
+  elements.tutorialManageTab?.classList.toggle("is-hidden", !hasPermission("tutorials:manage"));
+  if (!hasPermission("tutorials:manage") && state.tutorialTab === "manage") {
+    state.tutorialTab = "watch";
+  }
+  renderTutorialTabs();
   renderMonthlyGoalSettings();
   elements.bootstrapCrm.disabled = !hasPermission("pipeline:manage");
   elements.managePipeline.disabled = !hasPermission("pipeline:manage");
@@ -977,6 +986,7 @@ function renderAll() {
   renderConversationsTable();
   renderTasks();
   renderContacts();
+  renderTutorials();
   renderPresence();
   updateInterventionNavigation();
   updateArchiveNavigation();
@@ -3686,6 +3696,290 @@ function statusLabel(status) {
   return labels[status] || status || "—";
 }
 
+async function loadTutorials(options = {}) {
+  if (state.tutorialLoading) return;
+  state.tutorialLoading = true;
+  try {
+    const response = await apiRequest("/api/crm/tutorials");
+    state.tutorials = Array.isArray(response?.tutorials) ? response.tutorials : [];
+    if (!hasPermission("tutorials:manage") && state.tutorialTab === "manage") {
+      state.tutorialTab = "watch";
+    }
+    renderTutorials();
+  } catch (error) {
+    if (!options.silent) showToast(`Erro ao carregar tutoriais: ${error.message}`, "error");
+  } finally {
+    state.tutorialLoading = false;
+  }
+}
+
+function tutorialThumbnail(videoId) {
+  return `https://i.ytimg.com/vi/${encodeURIComponent(String(videoId || ""))}/hqdefault.jpg`;
+}
+
+function renderTutorialTabs() {
+  const manageAllowed = hasPermission("tutorials:manage");
+  if (!manageAllowed && state.tutorialTab === "manage") state.tutorialTab = "watch";
+  elements.tutorialWatchTab?.classList.toggle("is-active", state.tutorialTab === "watch");
+  elements.tutorialManageTab?.classList.toggle("is-active", state.tutorialTab === "manage");
+  elements.tutorialWatchPanel?.classList.toggle("is-active", state.tutorialTab === "watch");
+  elements.tutorialManagePanel?.classList.toggle("is-active", state.tutorialTab === "manage" && manageAllowed);
+}
+
+function switchTutorialTab(tab) {
+  const requested = tab === "manage" ? "manage" : "watch";
+  if (requested === "manage" && !hasPermission("tutorials:manage")) return;
+  state.tutorialTab = requested;
+  renderTutorialTabs();
+}
+
+function renderTutorialCategoryFilters(activeTutorials) {
+  if (!elements.tutorialCategoryFilters) return;
+  const categories = [...new Set(activeTutorials.map((item) => String(item.category || "Geral").trim() || "Geral"))]
+    .sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const available = new Set(["all", ...categories]);
+  if (!available.has(state.tutorialCategory)) state.tutorialCategory = "all";
+  elements.tutorialCategoryFilters.replaceChildren();
+
+  const addFilter = (value, label) => {
+    const button = createElement(
+      "button",
+      `tutorial-category-button${state.tutorialCategory === value ? " is-active" : ""}`,
+      label
+    );
+    button.type = "button";
+    button.addEventListener("click", () => {
+      state.tutorialCategory = value;
+      renderTutorials();
+    });
+    elements.tutorialCategoryFilters.appendChild(button);
+  };
+
+  addFilter("all", `Todos (${activeTutorials.length})`);
+  for (const category of categories) {
+    const total = activeTutorials.filter((item) => (item.category || "Geral") === category).length;
+    addFilter(category, `${category} (${total})`);
+  }
+}
+
+function openTutorialPlayer(tutorial) {
+  if (!tutorial?.youtubeVideoId || !elements.tutorialPlayerModal) return;
+  elements.tutorialPlayerTitle.textContent = tutorial.title || "Tutorial";
+  elements.tutorialPlayerDescription.textContent = tutorial.description || "";
+  elements.tutorialPlayerDescription.classList.toggle("is-hidden", !tutorial.description);
+  elements.tutorialPlayerIframe.src =
+    `https://www.youtube-nocookie.com/embed/${encodeURIComponent(tutorial.youtubeVideoId)}?autoplay=1&rel=0`;
+  elements.tutorialPlayerModal.classList.add("is-open");
+  elements.tutorialPlayerModal.setAttribute("aria-hidden", "false");
+}
+
+function closeTutorialPlayer() {
+  if (!elements.tutorialPlayerModal) return;
+  elements.tutorialPlayerModal.classList.remove("is-open");
+  elements.tutorialPlayerModal.setAttribute("aria-hidden", "true");
+  elements.tutorialPlayerIframe.src = "about:blank";
+}
+
+function renderTutorialWatchGrid(activeTutorials) {
+  if (!elements.tutorialVideoGrid) return;
+  const filtered = state.tutorialCategory === "all"
+    ? activeTutorials
+    : activeTutorials.filter((item) => (item.category || "Geral") === state.tutorialCategory);
+  elements.tutorialVideoGrid.replaceChildren();
+
+  if (!filtered.length) {
+    elements.tutorialVideoGrid.appendChild(
+      createElement("div", "empty-state tutorial-empty", "Nenhum tutorial disponível nesta categoria.")
+    );
+    return;
+  }
+
+  for (const tutorial of filtered) {
+    const card = createElement("article", "tutorial-video-card");
+    const media = createElement("button", "tutorial-video-media");
+    media.type = "button";
+    media.title = `Assistir ${tutorial.title}`;
+    const image = document.createElement("img");
+    image.src = tutorialThumbnail(tutorial.youtubeVideoId);
+    image.alt = `Miniatura: ${tutorial.title}`;
+    image.loading = "lazy";
+    const play = createElement("span", "tutorial-play-button", "▶");
+    media.append(image, play);
+    media.addEventListener("click", () => openTutorialPlayer(tutorial));
+
+    const body = createElement("div", "tutorial-video-body");
+    const title = createElement("h3", "tutorial-video-title", tutorial.title);
+    const category = createElement("span", "tutorial-video-category", tutorial.category || "Geral");
+    body.append(title, category);
+    if (tutorial.description) {
+      body.appendChild(createElement("p", "tutorial-video-description", tutorial.description));
+    }
+    card.append(media, body);
+    elements.tutorialVideoGrid.appendChild(card);
+  }
+}
+
+function resetTutorialForm() {
+  if (!elements.tutorialForm) return;
+  elements.tutorialForm.reset();
+  elements.tutorialEditId.value = "";
+  elements.tutorialCategory.value = "Geral";
+  elements.tutorialOrder.value = "0";
+  elements.tutorialActive.checked = true;
+  elements.tutorialFormTitle.textContent = "Adicionar vídeo";
+  elements.tutorialSubmit.textContent = "+ Adicionar vídeo";
+  elements.tutorialCancelEdit.classList.add("is-hidden");
+}
+
+function editTutorial(tutorial) {
+  if (!hasPermission("tutorials:manage")) return;
+  switchTutorialTab("manage");
+  elements.tutorialEditId.value = tutorial.id;
+  elements.tutorialYoutubeUrl.value = tutorial.youtubeUrl || `https://www.youtube.com/watch?v=${tutorial.youtubeVideoId}`;
+  elements.tutorialTitle.value = tutorial.title || "";
+  elements.tutorialDescription.value = tutorial.description || "";
+  elements.tutorialCategory.value = tutorial.category || "Geral";
+  elements.tutorialOrder.value = String(tutorial.displayOrder ?? 0);
+  elements.tutorialActive.checked = tutorial.active !== false;
+  elements.tutorialFormTitle.textContent = "Editar vídeo";
+  elements.tutorialSubmit.textContent = "Salvar alterações";
+  elements.tutorialCancelEdit.classList.remove("is-hidden");
+  elements.tutorialYoutubeUrl.focus();
+  elements.tutorialManagePanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function toggleTutorialActive(tutorial) {
+  if (!hasPermission("tutorials:manage")) return;
+  try {
+    await apiRequest(`/api/crm/tutorials/${encodeURIComponent(tutorial.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        youtubeUrl: tutorial.youtubeUrl,
+        title: tutorial.title,
+        description: tutorial.description,
+        category: tutorial.category,
+        displayOrder: tutorial.displayOrder,
+        active: !tutorial.active,
+      }),
+    });
+    showToast(tutorial.active ? "Tutorial ocultado da equipe." : "Tutorial ativado para a equipe.", "success");
+    await loadTutorials({ silent: true });
+  } catch (error) {
+    showToast(`Não foi possível alterar o tutorial: ${error.message}`, "error");
+  }
+}
+
+async function deleteTutorial(tutorial) {
+  if (!hasPermission("tutorials:manage")) return;
+  if (!window.confirm(`Excluir o tutorial "${tutorial.title}"?`)) return;
+  try {
+    await apiRequest(`/api/crm/tutorials/${encodeURIComponent(tutorial.id)}`, { method: "DELETE" });
+    if (elements.tutorialEditId.value === tutorial.id) resetTutorialForm();
+    showToast("Tutorial excluído.", "success");
+    await loadTutorials({ silent: true });
+  } catch (error) {
+    showToast(`Não foi possível excluir o tutorial: ${error.message}`, "error");
+  }
+}
+
+function renderTutorialManageList() {
+  if (!elements.tutorialManageList || !hasPermission("tutorials:manage")) return;
+  elements.tutorialManageList.replaceChildren();
+  elements.tutorialManageCount.textContent = String(state.tutorials.length);
+
+  if (!state.tutorials.length) {
+    elements.tutorialManageList.appendChild(
+      createElement("div", "empty-state", "Nenhum vídeo cadastrado ainda.")
+    );
+    return;
+  }
+
+  for (const tutorial of state.tutorials) {
+    const row = createElement("article", "tutorial-manage-row");
+    const thumb = createElement("button", "tutorial-manage-thumb");
+    thumb.type = "button";
+    thumb.title = "Assistir vídeo";
+    const image = document.createElement("img");
+    image.src = tutorialThumbnail(tutorial.youtubeVideoId);
+    image.alt = "";
+    image.loading = "lazy";
+    thumb.appendChild(image);
+    thumb.addEventListener("click", () => openTutorialPlayer(tutorial));
+
+    const info = createElement("div", "tutorial-manage-info");
+    info.append(
+      createElement("strong", "", tutorial.title),
+      createElement("span", "muted", tutorial.description || "Sem descrição")
+    );
+
+    const category = createElement("span", "tutorial-video-category", tutorial.category || "Geral");
+    const order = createElement("span", "tutorial-order-value", String(tutorial.displayOrder ?? 0));
+    const status = createElement(
+      "button",
+      `tutorial-status-button ${tutorial.active ? "is-active" : "is-inactive"}`,
+      tutorial.active ? "Ativo" : "Inativo"
+    );
+    status.type = "button";
+    status.title = tutorial.active ? "Ocultar da equipe" : "Ativar para a equipe";
+    status.addEventListener("click", () => toggleTutorialActive(tutorial));
+
+    const actions = createElement("div", "tutorial-manage-actions");
+    const preview = createElement("button", "icon-button", "◉");
+    preview.type = "button";
+    preview.title = "Visualizar";
+    preview.addEventListener("click", () => openTutorialPlayer(tutorial));
+    const edit = createElement("button", "icon-button", "✎");
+    edit.type = "button";
+    edit.title = "Editar";
+    edit.addEventListener("click", () => editTutorial(tutorial));
+    const remove = createElement("button", "icon-button tutorial-delete-button", "⌫");
+    remove.type = "button";
+    remove.title = "Excluir";
+    remove.addEventListener("click", () => deleteTutorial(tutorial));
+    actions.append(preview, edit, remove);
+
+    row.append(thumb, info, category, order, status, actions);
+    elements.tutorialManageList.appendChild(row);
+  }
+}
+
+function renderTutorials() {
+  if (!elements.tutorialVideoGrid) return;
+  const activeTutorials = state.tutorials.filter((item) => item.active !== false);
+  renderTutorialTabs();
+  renderTutorialCategoryFilters(activeTutorials);
+  renderTutorialWatchGrid(activeTutorials);
+  if (hasPermission("tutorials:manage")) renderTutorialManageList();
+}
+
+async function saveTutorial(event) {
+  event.preventDefault();
+  if (!hasPermission("tutorials:manage")) return;
+  const tutorialId = elements.tutorialEditId.value.trim();
+  const payload = {
+    youtubeUrl: elements.tutorialYoutubeUrl.value.trim(),
+    title: elements.tutorialTitle.value.trim(),
+    description: elements.tutorialDescription.value.trim(),
+    category: elements.tutorialCategory.value.trim() || "Geral",
+    displayOrder: Number(elements.tutorialOrder.value || 0),
+    active: elements.tutorialActive.checked,
+  };
+  elements.tutorialSubmit.disabled = true;
+  try {
+    await apiRequest(
+      tutorialId ? `/api/crm/tutorials/${encodeURIComponent(tutorialId)}` : "/api/crm/tutorials",
+      { method: tutorialId ? "PATCH" : "POST", body: JSON.stringify(payload) }
+    );
+    showToast(tutorialId ? "Tutorial atualizado." : "Tutorial adicionado.", "success");
+    resetTutorialForm();
+    await loadTutorials({ silent: true });
+  } catch (error) {
+    showToast(`Não foi possível salvar o tutorial: ${error.message}`, "error");
+  } finally {
+    elements.tutorialSubmit.disabled = false;
+  }
+}
+
 function switchView(viewName) {
   state.currentView = viewName;
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("is-active"));
@@ -3702,11 +3996,13 @@ function switchView(viewName) {
     conversations: ["ATENDIMENTO", "Conversas do Chatwoot"],
     tasks: ["PRODUTIVIDADE", "Tarefas comerciais"],
     contacts: ["RELACIONAMENTO", "Contatos"],
+    tutorials: ["CENTRAL DE AJUDA", "Tutoriais"],
     settings: ["ADMINISTRAÇÃO", "Configurações"],
   };
   const [eyebrow, title] = titles[viewName] || titles.dashboard;
   elements.pageEyebrow.textContent = eyebrow;
   elements.pageTitle.textContent = title;
+  if (viewName === "tutorials") loadTutorials({ silent: true });
 }
 
 function clearFilters() {
@@ -3837,6 +4133,29 @@ function cacheElements() {
     tasksList: byId("tasks-list"),
     contactCount: byId("contact-count"),
     contactsTable: byId("contacts-table"),
+    tutorialWatchTab: byId("tutorial-watch-tab"),
+    tutorialManageTab: byId("tutorial-manage-tab"),
+    tutorialWatchPanel: byId("tutorial-watch-panel"),
+    tutorialManagePanel: byId("tutorial-manage-panel"),
+    tutorialCategoryFilters: byId("tutorial-category-filters"),
+    tutorialVideoGrid: byId("tutorial-video-grid"),
+    tutorialForm: byId("tutorial-form"),
+    tutorialFormTitle: byId("tutorial-form-title"),
+    tutorialEditId: byId("tutorial-edit-id"),
+    tutorialYoutubeUrl: byId("tutorial-youtube-url"),
+    tutorialTitle: byId("tutorial-title"),
+    tutorialDescription: byId("tutorial-description"),
+    tutorialCategory: byId("tutorial-category"),
+    tutorialOrder: byId("tutorial-order"),
+    tutorialActive: byId("tutorial-active"),
+    tutorialSubmit: byId("tutorial-submit"),
+    tutorialCancelEdit: byId("tutorial-cancel-edit"),
+    tutorialManageCount: byId("tutorial-manage-count"),
+    tutorialManageList: byId("tutorial-manage-list"),
+    tutorialPlayerModal: byId("tutorial-player-modal"),
+    tutorialPlayerIframe: byId("tutorial-player-iframe"),
+    tutorialPlayerTitle: byId("tutorial-player-title"),
+    tutorialPlayerDescription: byId("tutorial-player-description"),
     historyType: byId("history-type"),
     historyPeriod: byId("history-period"),
     historyCustomPeriodFields: byId("history-custom-period-fields"),
@@ -4017,6 +4336,14 @@ function bindEvents() {
   elements.reloadMessages.addEventListener("click", loadMessages);
   elements.toggleSystemEvents?.addEventListener("click", toggleSystemEvents);
   elements.replyForm.addEventListener("submit", sendReply);
+  elements.tutorialForm?.addEventListener("submit", saveTutorial);
+  elements.tutorialCancelEdit?.addEventListener("click", resetTutorialForm);
+  document.querySelectorAll("[data-tutorial-tab]").forEach((button) => {
+    button.addEventListener("click", () => switchTutorialTab(button.dataset.tutorialTab));
+  });
+  document.querySelectorAll("[data-close-tutorial-player]").forEach((element) => {
+    element.addEventListener("click", closeTutorialPlayer);
+  });
 
   document.querySelectorAll("[data-close-drawer]").forEach((element) => {
     element.addEventListener("click", closeOpportunityDrawer);
@@ -4130,7 +4457,9 @@ function bindEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (elements.transitionModal.classList.contains("is-open")) {
+    if (elements.tutorialPlayerModal?.classList.contains("is-open")) {
+      closeTutorialPlayer();
+    } else if (elements.transitionModal.classList.contains("is-open")) {
       closeTransitionModal();
     } else if (elements.handoffModal?.classList.contains("is-open")) {
       closeHandoffModal();

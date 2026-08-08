@@ -3078,3 +3078,376 @@ tbody tr:hover {
   font-size: 0.82rem;
   font-weight: 800;
 }
+
+/* CRM V1.3.4 — central de tutoriais */
+.tutorials-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.tutorials-heading h2 {
+  margin: 0 0 6px;
+  font-size: 26px;
+}
+
+.tutorials-heading p:last-child {
+  margin: 0;
+}
+
+.tutorial-tabs {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tutorial-tab {
+  position: relative;
+  padding: 11px 4px 13px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.tutorial-tab.is-active {
+  color: var(--text);
+}
+
+.tutorial-tab.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 3px;
+  border-radius: 999px 999px 0 0;
+  background: var(--primary);
+  content: "";
+}
+
+.tutorial-tab-panel {
+  display: none;
+}
+
+.tutorial-tab-panel.is-active {
+  display: block;
+}
+
+.tutorial-category-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.tutorial-category-button {
+  padding: 8px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tutorial-category-button.is-active {
+  border-color: var(--primary);
+  color: #111;
+  background: #f3cf65;
+}
+
+.tutorial-video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.tutorial-video-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+.tutorial-video-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  background: #0f172a;
+  cursor: pointer;
+}
+
+.tutorial-video-media img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.tutorial-video-media:hover img {
+  transform: scale(1.02);
+  opacity: 0.9;
+}
+
+.tutorial-play-button {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  padding-left: 3px;
+  border-radius: 50%;
+  color: #111;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.28);
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+}
+
+.tutorial-video-body {
+  padding: 15px 16px 17px;
+}
+
+.tutorial-video-title {
+  margin: 0 0 9px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.tutorial-video-category {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #805f0b;
+  background: #fff5cf;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.tutorial-video-description {
+  display: -webkit-box;
+  margin: 10px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tutorial-empty {
+  grid-column: 1 / -1;
+}
+
+.tutorial-manager-card,
+.tutorial-list-card {
+  margin-bottom: 18px;
+}
+
+.tutorial-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.tutorial-field {
+  display: grid;
+  gap: 7px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tutorial-field small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.tutorial-field-wide,
+.tutorial-active-field,
+.tutorial-form-actions {
+  grid-column: 1 / -1;
+}
+
+.tutorial-active-field {
+  margin: 0;
+}
+
+.tutorial-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.tutorial-manage-list {
+  display: grid;
+  gap: 0;
+  overflow-x: auto;
+}
+
+.tutorial-manage-row {
+  min-width: 760px;
+  display: grid;
+  grid-template-columns: 74px minmax(220px, 1fr) 120px 70px 84px 120px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tutorial-manage-row:last-child {
+  border-bottom: 0;
+}
+
+.tutorial-manage-thumb {
+  width: 74px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 7px;
+  background: #0f172a;
+  cursor: pointer;
+}
+
+.tutorial-manage-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.tutorial-manage-info {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.tutorial-manage-info strong,
+.tutorial-manage-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tutorial-manage-info strong {
+  font-size: 12px;
+}
+
+.tutorial-manage-info span {
+  font-size: 10px;
+}
+
+.tutorial-order-value {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tutorial-status-button {
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.tutorial-status-button.is-active {
+  border-color: #a7f3d0;
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.tutorial-status-button.is-inactive {
+  border-color: #e2e8f0;
+  color: #64748b;
+  background: #f8fafc;
+}
+
+.tutorial-manage-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.tutorial-delete-button {
+  color: var(--danger);
+}
+
+.tutorial-player-card {
+  position: relative;
+  z-index: 1;
+  width: min(960px, 100%);
+  overflow: hidden;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 28px 90px rgba(15, 23, 42, 0.34);
+}
+
+.tutorial-player-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px 13px;
+}
+
+.tutorial-player-header h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.tutorial-player-frame {
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+
+.tutorial-player-frame iframe {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border: 0;
+}
+
+.tutorial-player-description {
+  margin: 0;
+  padding: 14px 18px 18px;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .tutorial-form {
+    grid-template-columns: 1fr;
+  }
+
+  .tutorial-field-wide,
+  .tutorial-active-field,
+  .tutorial-form-actions {
+    grid-column: auto;
+  }
+
+  .tutorial-video-grid {
+    grid-template-columns: 1fr;
+  }
+}

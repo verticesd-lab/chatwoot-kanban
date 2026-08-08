@@ -101,6 +101,10 @@
             <span class="nav-icon">◎</span>
             Contatos
           </button>
+          <button class="nav-item" data-view="tutorials">
+            <span class="nav-icon">▸</span>
+            Tutoriais
+          </button>
         </nav>
 
         <div class="sidebar-spacer"></div>
@@ -437,6 +441,85 @@
             </article>
           </section>
 
+          <section id="view-tutorials" class="view">
+            <div class="tutorials-heading">
+              <div>
+                <p class="eyebrow">CENTRAL DE AJUDA</p>
+                <h2>🎓 Tutoriais</h2>
+                <p class="muted">Aprenda a usar o sistema assistindo aos vídeos disponibilizados para a equipe.</p>
+              </div>
+            </div>
+
+            <div class="tutorial-tabs" role="tablist" aria-label="Tutoriais">
+              <button id="tutorial-watch-tab" class="tutorial-tab is-active" type="button" data-tutorial-tab="watch">
+                ▶ Assistir vídeos
+              </button>
+              <button id="tutorial-manage-tab" class="tutorial-tab is-hidden" type="button" data-tutorial-tab="manage">
+                ⚙ Gerenciar
+              </button>
+            </div>
+
+            <div id="tutorial-watch-panel" class="tutorial-tab-panel is-active">
+              <div id="tutorial-category-filters" class="tutorial-category-filters"></div>
+              <div id="tutorial-video-grid" class="tutorial-video-grid"></div>
+            </div>
+
+            <div id="tutorial-manage-panel" class="tutorial-tab-panel">
+              <article class="panel tutorial-manager-card">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">CONTEÚDO</p>
+                    <h2 id="tutorial-form-title">Adicionar vídeo</h2>
+                  </div>
+                </div>
+                <form id="tutorial-form" class="tutorial-form">
+                  <input id="tutorial-edit-id" type="hidden" />
+                  <label class="tutorial-field tutorial-field-wide">
+                    Link do YouTube *
+                    <input id="tutorial-youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=... ou https://youtu.be/..." required />
+                    <small>Para acesso por link, publique no YouTube como “Não listado”. Vídeos privados não reproduzem para outros usuários.</small>
+                  </label>
+                  <label class="tutorial-field tutorial-field-wide">
+                    Título do vídeo *
+                    <input id="tutorial-title" type="text" maxlength="120" placeholder="Ex.: Como atender um lead" required />
+                  </label>
+                  <label class="tutorial-field tutorial-field-wide">
+                    Descrição (opcional)
+                    <textarea id="tutorial-description" rows="3" maxlength="800" placeholder="Breve descrição do que o vídeo ensina..."></textarea>
+                  </label>
+                  <label class="tutorial-field">
+                    Categoria
+                    <input id="tutorial-category" type="text" maxlength="60" value="Geral" placeholder="Geral" />
+                  </label>
+                  <label class="tutorial-field">
+                    Ordem de exibição
+                    <input id="tutorial-order" type="number" step="1" value="0" />
+                    <small>Menor número aparece primeiro.</small>
+                  </label>
+                  <label class="settings-toggle-row tutorial-active-field">
+                    <input id="tutorial-active" type="checkbox" checked />
+                    <span>Vídeo ativo para a equipe</span>
+                  </label>
+                  <div class="tutorial-form-actions">
+                    <button id="tutorial-submit" class="button button-primary" type="submit">+ Adicionar vídeo</button>
+                    <button id="tutorial-cancel-edit" class="button button-ghost is-hidden" type="button">Cancelar edição</button>
+                  </div>
+                </form>
+              </article>
+
+              <article class="panel tutorial-list-card">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">BIBLIOTECA</p>
+                    <h2>Vídeos cadastrados</h2>
+                  </div>
+                  <span id="tutorial-manage-count" class="count-badge">0</span>
+                </div>
+                <div id="tutorial-manage-list" class="tutorial-manage-list"></div>
+              </article>
+            </div>
+          </section>
+
           <section id="view-settings" class="view">
             <div class="settings-grid">
               <article class="panel">
@@ -728,6 +811,29 @@
         </div>
       </section>
     </aside>
+
+    <div id="tutorial-player-modal" class="modal tutorial-player-modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-tutorial-player></div>
+      <section class="tutorial-player-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-player-title">
+        <header class="tutorial-player-header">
+          <div>
+            <p class="eyebrow">TUTORIAL</p>
+            <h2 id="tutorial-player-title">Vídeo</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-tutorial-player aria-label="Fechar">×</button>
+        </header>
+        <div class="tutorial-player-frame">
+          <iframe
+            id="tutorial-player-iframe"
+            title="Player do tutorial"
+            src="about:blank"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowfullscreen
+          ></iframe>
+        </div>
+        <p id="tutorial-player-description" class="muted tutorial-player-description"></p>
+      </section>
+    </div>
 
     <div id="transition-modal" class="modal" aria-hidden="true">
       <div class="modal-backdrop" data-close-transition></div>

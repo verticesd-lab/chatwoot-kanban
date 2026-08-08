@@ -34,7 +34,7 @@ app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://i.ytimg.com; connect-src 'self'; frame-src https://www.youtube-nocookie.com https://www.youtube.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
   );
   next();
 });
@@ -551,6 +551,134 @@ app.get("/api/crm/config", requireSession, (req, res) => {
     filterPresets: db.listFilterPresets(session.organization_id, session.user_id),
   });
 });
+
+function extractYoutubeVideoId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^[A-Za-z0-9_-]{11}$/.test(raw)) return raw;
+
+  let parsed;
+  try {
+    parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch (_error) {
+    return null;
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  let candidate = "";
+  if (hostname === "youtu.be") {
+    candidate = parsed.pathname.split("/").filter(Boolean)[0] || "";
+  } else if (["youtube.com", "m.youtube.com", "music.youtube.com"].includes(hostname)) {
+    if (parsed.pathname === "/watch") candidate = parsed.searchParams.get("v") || "";
+    else {
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      if (["embed", "shorts", "live"].includes(parts[0])) candidate = parts[1] || "";
+    }
+  } else if (hostname === "youtube-nocookie.com") {
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    if (parts[0] === "embed") candidate = parts[1] || "";
+  }
+
+  return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : null;
+}
+
+function tutorialPayload(body = {}) {
+  const youtubeVideoId = extractYoutubeVideoId(body.youtubeUrl || body.youtubeVideoId);
+  if (!youtubeVideoId) {
+    const error = new Error("Informe um link válido do YouTube");
+    error.status = 400;
+    throw error;
+  }
+  const title = String(body.title || "").trim().slice(0, 120);
+  if (!title) {
+    const error = new Error("Informe o título do vídeo");
+    error.status = 400;
+    throw error;
+  }
+  const description = String(body.description || "").trim().slice(0, 800);
+  const category = String(body.category || "Geral").trim().slice(0, 60) || "Geral";
+  const requestedOrder = Number(body.displayOrder);
+  const displayOrder = Number.isInteger(requestedOrder)
+    ? Math.max(-100000, Math.min(100000, requestedOrder))
+    : 0;
+  const active = body.active === undefined
+    ? true
+    : body.active === true || String(body.active).toLowerCase() === "true";
+  return {
+    youtubeVideoId,
+    youtubeUrl: `https://www.youtube.com/watch?v=${youtubeVideoId}`,
+    title,
+    description,
+    category,
+    displayOrder,
+    active,
+  };
+}
+
+app.get("/api/crm/tutorials", requireSession, (req, res) => {
+  const canManage = hasPermission(req.crmSession, "tutorials:manage");
+  return res.json({
+    tutorials: db.listTutorialVideos(req.crmSession.organization_id, {
+      includeInactive: canManage,
+    }),
+    canManage,
+  });
+});
+
+app.post(
+  "/api/crm/tutorials",
+  requireSession,
+  requirePermission("tutorials:manage"),
+  (req, res) => {
+    try {
+      const payload = tutorialPayload(req.body);
+      const tutorial = db.createTutorialVideo({
+        organizationId: req.crmSession.organization_id,
+        actorUserId: req.crmSession.user_id,
+        ...payload,
+      });
+      return res.status(201).json({ tutorial });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.message || "Falha ao cadastrar tutorial" });
+    }
+  }
+);
+
+app.patch(
+  "/api/crm/tutorials/:id",
+  requireSession,
+  requirePermission("tutorials:manage"),
+  (req, res) => {
+    try {
+      const payload = tutorialPayload(req.body);
+      const tutorial = db.updateTutorialVideo({
+        organizationId: req.crmSession.organization_id,
+        actorUserId: req.crmSession.user_id,
+        tutorialId: req.params.id,
+        ...payload,
+      });
+      if (!tutorial) return res.status(404).json({ error: "Tutorial não encontrado" });
+      return res.json({ tutorial });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.message || "Falha ao atualizar tutorial" });
+    }
+  }
+);
+
+app.delete(
+  "/api/crm/tutorials/:id",
+  requireSession,
+  requirePermission("tutorials:manage"),
+  (req, res) => {
+    const deleted = db.deleteTutorialVideo({
+      organizationId: req.crmSession.organization_id,
+      actorUserId: req.crmSession.user_id,
+      tutorialId: req.params.id,
+    });
+    if (!deleted) return res.status(404).json({ error: "Tutorial não encontrado" });
+    return res.status(204).send();
+  }
+);
 
 app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => {
   try {

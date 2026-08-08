@@ -25,6 +25,8 @@ for (const endpoint of [
   "/api/crm/transfer-requests/:id/resolve",
   "/api/crm/opportunities/:conversationId/archive",
   "/api/crm/opportunities/:conversationId/restore",
+  "/api/crm/tutorials",
+  "/api/crm/tutorials/:id",
 ]) {
   assert(server.includes(endpoint), `Endpoint ausente: ${endpoint}`);
 }
@@ -37,6 +39,9 @@ for (const id of [
   "redistribution-modal",
   "sidebar-presence-list",
   "filter-period",
+  "view-tutorials",
+  "tutorial-video-grid",
+  "tutorial-player-modal",
 ]) {
   assert(htmlIds.includes(id), `Elemento da V1.3.3 ausente: ${id}`);
 }
@@ -45,7 +50,10 @@ assert(script.includes("const PIPELINE_COLUMN_PAGE_SIZE = 50"));
 assert(script.includes("state.historyLimit += PIPELINE_COLUMN_PAGE_SIZE"));
 assert(script.includes("state.archiveLimit += PIPELINE_COLUMN_PAGE_SIZE"));
 assert(styles.includes("CRM V1.3.3 — controle operacional"));
+assert(styles.includes("CRM V1.3.4 — central de tutoriais"));
+assert(server.includes("https://www.youtube-nocookie.com"));
+assert(script.includes("function renderTutorials()"));
 assert(styles.includes("flex-direction: column"));
 assert(styles.includes("border-left: 3px solid #94a3b8"));
 
-console.log("CRM V1.3.3 static UI/API contract tests: OK");
+console.log("CRM V1.3.4 static UI/API contract tests: OK");
