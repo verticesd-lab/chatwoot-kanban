@@ -3,75 +3,1178 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Kanban</title>
+    <meta name="color-scheme" content="light dark" />
+    <title>VR Multimarcas - Ingleses | CRM</title>
+    <link rel="icon" type="image/jpeg" href="/assets/vr-symbol.jpg" />
     <link rel="stylesheet" href="styles.css" />
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-    />
   </head>
   <body>
-    <header>
-      <h1>Kanban</h1>
-      <div class="header-controls">
-        <div class="input-group">
-          <input
-            type="password"
-            id="api-token"
-            placeholder="Token de API do Chatwoot"
+    <div id="login-screen" class="login-screen">
+      <form id="login-form" class="login-card">
+        <div class="login-brand">
+          <img
+            class="login-brand-logo"
+            src="/assets/vr-multimarcas-logo.jpg"
+            alt="VR Multimarcas — Camboriú, Itajaí e Ingleses"
           />
-          <button
-            type="button"
-            class="toggle-password"
-            id="toggle-api-token"
-            title="Mostrar/Esconder Token"
-          >
-            <i class="fas fa-eye"></i>
+          <p class="eyebrow">VR MULTIMARCAS - INGLESES</p>
+          <h1>Entre no seu CRM</h1>
+          <p class="muted">
+            Acesso centralizado por usuário. A conexão com o Chatwoot fica protegida no servidor.
+          </p>
+        </div>
+
+        <label>
+          E-mail
+          <input
+            id="login-email"
+            type="email"
+            autocomplete="username"
+            placeholder="seuemail@empresa.com.br"
+            required
+          />
+        </label>
+
+        <label>
+          Senha
+          <input
+            id="login-password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="Digite sua senha"
+            required
+          />
+        </label>
+
+        <button id="login-submit" class="button button-primary" type="submit">
+          Entrar no CRM
+        </button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+    </div>
+
+    <div id="app" class="app-shell is-hidden">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <img
+            class="sidebar-brand-symbol"
+            src="/assets/vr-symbol.jpg"
+            alt="VR Multimarcas"
+          />
+          <div>
+            <strong>VR Multimarcas - Ingleses</strong>
+            <span>CRM comercial</span>
+          </div>
+        </div>
+
+        <nav class="main-nav" aria-label="Navegação principal">
+          <button class="nav-item is-active" data-view="dashboard">
+            <span class="nav-icon">◫</span>
+            Dashboard
           </button>
-        </div>
-        <input type="text" id="account-id" placeholder="ID da Conta" />
-        <button id="load-data" class="btn primary">Atualizar</button>
-      </div>
-    </header>
+          <button class="nav-item nav-item-alert" data-view="interventions">
+            <span class="nav-icon">⚠</span>
+            Intervenções
+            <span id="intervention-nav-count" class="nav-count is-hidden">0</span>
+          </button>
+          <button class="nav-item" data-view="pipeline">
+            <span class="nav-icon">▥</span>
+            Pipeline
+          </button>
+          <button class="nav-item" data-view="history">
+            <span class="nav-icon">◷</span>
+            Histórico
+          </button>
+          <button id="archive-nav-item" class="nav-item is-hidden" data-view="archive">
+            <span class="nav-icon">▣</span>
+            Arquivo
+          </button>
+          <button class="nav-item" data-view="conversations">
+            <span class="nav-icon">◌</span>
+            Conversas
+          </button>
+          <button id="reactivation-nav-item" class="nav-item is-hidden" data-view="reactivations">
+            <span class="nav-icon">↻</span>
+            Reativação
+            <span id="reactivation-nav-count" class="nav-count is-hidden">0</span>
+          </button>
+          <button class="nav-item" data-view="tasks">
+            <span class="nav-icon">✓</span>
+            Tarefas
+          </button>
+          <button class="nav-item" data-view="contacts">
+            <span class="nav-icon">◎</span>
+            Contatos
+          </button>
+          <button class="nav-item" data-view="tutorials">
+            <span class="nav-icon">▸</span>
+            Tutoriais
+          </button>
+        </nav>
 
-    <main>
-      <div class="kanban-container">
-        <div class="kanban-column" id="pending">
-          <h2>Pendentes <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-        <div class="kanban-column" id="open">
-          <h2>Em Aberto <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-        <div class="kanban-column" id="snoozed">
-          <h2>Adiados <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-        <div class="kanban-column" id="resolved">
-          <h2>Resolvidos <span class="counter">0</span></h2>
-          <div class="kanban-items"></div>
-        </div>
-      </div>
-    </main>
+        <div class="sidebar-spacer"></div>
 
-    <div id="conversation-modal" class="modal">
-      <div class="modal-content">
-        <span class="close">&times;</span>
-        <h2>Detalhes da Conversa</h2>
-        <div id="conversation-details"></div>
+        <nav class="main-nav secondary-nav">
+          <button class="nav-item" data-view="settings">
+            <span class="nav-icon">⚙</span>
+            Configurações
+          </button>
+        </nav>
+
+        <div id="sidebar-presence" class="sidebar-presence">
+          <div class="sidebar-presence-heading">
+            <span>Equipe agora</span>
+            <button id="refresh-presence" class="text-button" type="button" title="Atualizar presença">↻</button>
+          </div>
+          <div id="sidebar-presence-list" class="sidebar-presence-list"></div>
+        </div>
+
+        <div class="sidebar-account">
+          <span id="current-user-status-dot" class="status-dot"></span>
+          <div>
+            <strong id="sidebar-user-name">Usuário conectado</strong>
+            <span id="sidebar-user-role">Perfil —</span>
+            <span id="sidebar-account-id">Conta —</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div>
+            <p id="page-eyebrow" class="eyebrow">VISÃO GERAL</p>
+            <h1 id="page-title">Dashboard comercial</h1>
+          </div>
+
+          <div class="topbar-actions">
+            <label class="search-box">
+              <span>⌕</span>
+              <input
+                id="global-search"
+                type="search"
+                placeholder="Buscar nome, telefone, conversa, mensagem..."
+              />
+            </label>
+            <div class="sync-control">
+              <span id="last-sync" class="sync-status">Aguardando sincronização</span>
+              <label class="auto-refresh-toggle" title="Atualiza a cada 60 segundos">
+                <input id="auto-refresh-toggle" type="checkbox" checked />
+                <span>Automático</span>
+              </label>
+            </div>
+            <button id="refresh-button" class="icon-button" title="Atualizar dados agora">↻</button>
+          </div>
+        </header>
+
+        <main class="content">
+          <section id="view-dashboard" class="view is-active">
+            <div id="metrics-grid" class="metrics-grid"></div>
+
+
+            <article id="monthly-sales-goal-card" class="panel monthly-sales-goal-card is-hidden">
+              <div class="monthly-goal-header">
+                <div>
+                  <p class="eyebrow">META DA LOJA</p>
+                  <h2 id="monthly-sales-goal-title">Meta mensal</h2>
+                  <p id="monthly-sales-goal-period" class="muted">—</p>
+                </div>
+                <div class="monthly-goal-score">
+                  <strong id="monthly-sales-goal-score">0 / 0</strong>
+                  <span>vendas</span>
+                </div>
+              </div>
+              <div class="monthly-goal-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="monthly-sales-goal-fill" class="monthly-goal-fill"></div>
+              </div>
+              <div class="monthly-goal-footer">
+                <strong id="monthly-sales-goal-message">Meta desativada</strong>
+                <span id="monthly-sales-goal-percentage">0%</span>
+              </div>
+            </article>
+
+            <div class="dashboard-grid">
+              <article class="panel panel-wide">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">PIPELINE</p>
+                    <h2>Distribuição das oportunidades</h2>
+                  </div>
+                  <button class="text-button" data-go-view="pipeline">Abrir pipeline →</button>
+                </div>
+                <div id="stage-overview" class="stage-overview"></div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">FOCO OPERACIONAL</p>
+                    <h2>Minha fila agora</h2>
+                  </div>
+                </div>
+                <div id="dashboard-tasks" class="compact-list"></div>
+              </article>
+            </div>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">ATIVIDADE</p>
+                  <h2>Conversas recentes</h2>
+                </div>
+              </div>
+              <div id="recent-conversations" class="data-list"></div>
+            </article>
+          </section>
+
+          <section id="view-interventions" class="view">
+            <div class="intervention-summary">
+              <div>
+                <p class="eyebrow">SEGURANÇA OPERACIONAL</p>
+                <h2>Intervenção humana</h2>
+                <p class="muted">
+                  Conversas que o fluxo não conseguiu resolver ou que estão sob atendimento manual.
+                  A fila respeita o escopo de cada usuário.
+                </p>
+              </div>
+              <div class="intervention-summary-count">
+                <strong id="intervention-view-count">0</strong>
+                <span>pendentes no seu escopo</span>
+              </div>
+            </div>
+            <article id="transfer-requests-panel" class="panel transfer-requests-panel is-hidden">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">REDISTRIBUIÇÃO</p>
+                  <h3>Solicitações dos vendedores</h3>
+                </div>
+                <span id="transfer-request-count" class="count-badge">0</span>
+              </div>
+              <div id="transfer-request-list" class="transfer-request-list"></div>
+            </article>
+            <div class="intervention-toolbar">
+              <button class="button button-primary" type="button" data-intervention-filter="all">Todas</button>
+              <button class="button button-ghost" type="button" data-intervention-filter="unassigned">Sem responsável</button>
+              <button class="button button-ghost" type="button" data-intervention-filter="mine">Comigo</button>
+            </div>
+            <div id="intervention-list" class="intervention-list"></div>
+          </section>
+
+          <section id="view-pipeline" class="view">
+            <div class="toolbar">
+              <select id="filter-assignee" aria-label="Filtrar por responsável">
+                <option value="">Todos os responsáveis</option>
+              </select>
+              <select id="filter-team" aria-label="Filtrar por time">
+                <option value="">Todos os times</option>
+              </select>
+              <select id="filter-inbox" aria-label="Filtrar por caixa de entrada">
+                <option value="">Todas as caixas</option>
+              </select>
+              <select id="filter-label" aria-label="Filtrar por etiqueta">
+                <option value="">Todas as etiquetas</option>
+              </select>
+              <select id="filter-priority" aria-label="Filtrar por prioridade">
+                <option value="">Todas as prioridades</option>
+                <option value="none">Sem prioridade</option>
+                <option value="low">Baixa</option>
+                <option value="medium">Média</option>
+                <option value="high">Alta</option>
+                <option value="urgent">Urgente</option>
+              </select>
+              <select id="filter-task-status" aria-label="Filtrar por situação da tarefa">
+                <option value="">Todas as tarefas</option>
+                <option value="none">Sem tarefa</option>
+                <option value="pending">Tarefa pendente</option>
+                <option value="overdue">Tarefa vencida</option>
+                <option value="done">Tarefa concluída</option>
+              </select>
+              <select id="filter-period" aria-label="Período de ganho e perda">
+                <option value="today">Encerrados hoje</option>
+                <option value="7d" selected>Encerrados: últimos 7 dias</option>
+                <option value="30d">Encerrados: últimos 30 dias</option>
+                <option value="month">Encerrados: este mês</option>
+                <option value="custom">Período personalizado</option>
+                <option value="all">Todo o histórico</option>
+              </select>
+              <div id="custom-period-fields" class="custom-period-fields is-hidden">
+                <input id="filter-period-start" type="date" aria-label="Data inicial" />
+                <input id="filter-period-end" type="date" aria-label="Data final" />
+              </div>
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <select id="filter-preset" aria-label="Aplicar filtro salvo">
+                <option value="">Filtros salvos</option>
+              </select>
+              <button id="save-filter-preset" class="button button-ghost">Salvar filtro</button>
+              <button id="delete-filter-preset" class="button button-ghost" disabled>Excluir salvo</button>
+              <button id="manage-pipeline" class="button button-primary">Configurar etapas</button>
+              <button id="clear-filters" class="button button-ghost">Limpar filtros</button>
+            </div>
+            <div class="pipeline-hint">
+              <span>Arraste os cartões entre as etapas.</span>
+              <div class="idle-legend" aria-label="Legenda do tempo sem interação">
+                <span><i class="idle-dot idle-ok"></i>Recente: menos de 4h</span>
+                <span><i class="idle-dot idle-warning"></i>Atenção: 4h a 24h</span>
+                <span><i class="idle-dot idle-critical"></i>Crítico: mais de 24h</span>
+                <span><i class="idle-dot idle-unknown"></i>Sem data</span>
+              </div>
+              <span id="pipeline-result-count">0 oportunidades exibidas</span>
+            </div>
+            <div id="pipeline-board" class="pipeline-board"></div>
+          </section>
+
+          <section id="view-conversations" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">ATENDIMENTO</p>
+                  <h2>Todas as conversas</h2>
+                </div>
+                <span id="conversation-count" class="count-badge">0</span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Contato</th>
+                      <th>Etapa CRM</th>
+                      <th>Status Chatwoot</th>
+                      <th>Responsável</th>
+                      <th>Última atividade</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="conversations-table"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+          <section id="view-reactivations" class="view">
+            <div class="reactivation-heading">
+              <div>
+                <p class="eyebrow">RECUPERAÇÃO CONTROLADA</p>
+                <h2>↻ Reativação de leads</h2>
+                <p class="muted">Retome oportunidades paradas uma única vez, com seleção manual, prévia e auditoria.</p>
+              </div>
+              <button id="reactivation-refresh" class="button button-ghost" type="button">↻ Atualizar</button>
+            </div>
+
+            <div id="reactivation-disabled-banner" class="reactivation-warning is-hidden">
+              <strong>Envio protegido:</strong> a central está disponível para revisão, mas os disparos permanecem desativados até <code>REACTIVATION_SEND_ENABLED=true</code>.
+            </div>
+
+            <div class="reactivation-metrics" aria-label="Indicadores de reativação">
+              <article class="reactivation-metric-card">
+                <span>Elegíveis agora</span>
+                <strong id="reactivation-metric-eligible">0</strong>
+              </article>
+              <article class="reactivation-metric-card">
+                <span>Enviados</span>
+                <strong id="reactivation-metric-sent">0</strong>
+              </article>
+              <article class="reactivation-metric-card">
+                <span>Responderam</span>
+                <strong id="reactivation-metric-replied">0</strong>
+              </article>
+              <article class="reactivation-metric-card">
+                <span>Taxa de resposta</span>
+                <strong id="reactivation-metric-rate">0%</strong>
+              </article>
+            </div>
+
+            <div class="reactivation-layout">
+              <article class="panel reactivation-candidates-panel">
+                <div class="panel-header reactivation-panel-header">
+                  <div>
+                    <p class="eyebrow">1. SELECIONE</p>
+                    <h2>Leads elegíveis</h2>
+                    <p class="muted">A etiqueta “reativação única enviada” bloqueia automaticamente novo disparo.</p>
+                  </div>
+                  <span id="reactivation-candidate-count" class="count-badge">0</span>
+                </div>
+
+                <div class="reactivation-filters">
+                  <label>
+                    Loja
+                    <input id="reactivation-store-name" type="text" value="VR Multimarcas - Ingleses" readonly />
+                  </label>
+                  <label>
+                    Período
+                    <select id="reactivation-period">
+                      <option value="today">Hoje</option>
+                      <option value="3d">Últimos 3 dias</option>
+                      <option value="7d" selected>Últimos 7 dias</option>
+                      <option value="14d">Últimos 14 dias</option>
+                      <option value="30d">Últimos 30 dias</option>
+                      <option value="all">Todo o histórico ativo</option>
+                    </select>
+                  </label>
+                  <label class="reactivation-search-field">
+                    Buscar
+                    <input id="reactivation-search" type="search" placeholder="Nome, telefone ou conversa" />
+                  </label>
+                </div>
+
+                <fieldset class="reactivation-label-filters">
+                  <legend>Etiquetas de elegibilidade</legend>
+                  <label><input type="checkbox" data-reactivation-label value="aguardando-cpf-de-terceiros" checked /> Aguardando CPF de terceiros</label>
+                  <label><input type="checkbox" data-reactivation-label value="fora-do-horario" checked /> Fora do horário</label>
+                  <label><input type="checkbox" data-reactivation-label value="aguardando-retorno-do-cliente" checked /> Aguardando retorno do cliente</label>
+                </fieldset>
+
+                <div class="reactivation-selection-toolbar">
+                  <div id="reactivation-selection-summary" class="muted">0 selecionados</div>
+                  <div>
+                    <button id="reactivation-select-all" class="button button-ghost button-small" type="button">Selecionar elegíveis</button>
+                    <button id="reactivation-clear-selection" class="button button-ghost button-small" type="button">Limpar</button>
+                    <button id="reactivation-add-manual" class="button button-ghost button-small" type="button">+ Adicionar contato</button>
+                  </div>
+                </div>
+
+                <div class="table-scroll reactivation-table-scroll">
+                  <table class="reactivation-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Contato</th>
+                        <th>Motivo</th>
+                        <th>Última atividade</th>
+                        <th>Situação</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="reactivation-candidates-table"></tbody>
+                  </table>
+                </div>
+                <p id="reactivation-blocked-summary" class="reactivation-blocked-summary muted"></p>
+              </article>
+
+              <article class="panel reactivation-composer-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">2. PREPARE</p>
+                    <h2>Mensagem da reativação</h2>
+                  </div>
+                </div>
+                <label>
+                  Nome da campanha
+                  <input id="reactivation-campaign-name" type="text" maxlength="120" placeholder="Ex.: Retomada segunda-feira" />
+                </label>
+                <label>
+                  Modelo
+                  <select id="reactivation-template"></select>
+                </label>
+                <label>
+                  Mensagem
+                  <textarea id="reactivation-message" rows="7" maxlength="1200"></textarea>
+                </label>
+                <div class="reactivation-template-help">
+                  Use <code>{{primeiro_nome}}</code> para personalizar. O texto poderá ser revisado antes do envio.
+                </div>
+                <div class="reactivation-compose-footer">
+                  <div>
+                    <strong id="reactivation-compose-count">0</strong>
+                    <span>leads selecionados</span>
+                  </div>
+                  <button id="reactivation-review" class="button button-primary" type="button">Revisar reativação →</button>
+                </div>
+              </article>
+            </div>
+
+            <article class="panel reactivation-history-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">AUDITORIA</p>
+                  <h2>Histórico de reativações</h2>
+                  <p class="muted">Campanhas, bloqueios, falhas e respostas detectadas pelo Chatwoot.</p>
+                </div>
+              </div>
+              <div id="reactivation-history" class="reactivation-history"></div>
+            </article>
+          </section>
+
+          <section id="view-tasks" class="view">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">EXECUÇÃO</p>
+                  <h2>Agenda de tarefas</h2>
+                </div>
+                <span id="task-count" class="count-badge">0</span>
+              </div>
+              <div class="task-toolbar" role="group" aria-label="Filtrar tarefas">
+                <button class="task-filter is-active" data-task-view-filter="all">Todas</button>
+                <button class="task-filter" data-task-view-filter="pending">Pendentes</button>
+                <button class="task-filter" data-task-view-filter="overdue">Vencidas</button>
+                <button class="task-filter" data-task-view-filter="done">Concluídas</button>
+              </div>
+              <div id="task-summary" class="task-summary"></div>
+              <div id="tasks-list" class="task-list"></div>
+            </article>
+          </section>
+
+          <section id="view-contacts" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">BASE</p>
+                  <h2>Contatos ativos</h2>
+                </div>
+                <span id="contact-count" class="count-badge">0</span>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Contato</th>
+                      <th>Telefone</th>
+                      <th>E-mail</th>
+                      <th>Conversas</th>
+                      <th>Última atividade</th>
+                    </tr>
+                  </thead>
+                  <tbody id="contacts-table"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+
+
+          <section id="view-history" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header history-panel-header">
+                <div>
+                  <p class="eyebrow">RESULTADOS</p>
+                  <h2>Histórico encerrado</h2>
+                  <p class="muted">Consulte oportunidades ganhas ou perdidas sem poluir o Pipeline diário.</p>
+                </div>
+                <div class="history-filters">
+                  <select id="history-type" aria-label="Tipo de resultado">
+                    <option value="all">Ganho e perdido</option>
+                    <option value="won">Somente ganho</option>
+                    <option value="lost">Somente perdido</option>
+                  </select>
+                  <select id="history-period" aria-label="Período do histórico">
+                    <option value="today">Hoje</option>
+                    <option value="7d">Últimos 7 dias</option>
+                    <option value="30d" selected>Últimos 30 dias</option>
+                    <option value="month">Este mês</option>
+                    <option value="custom">Período personalizado</option>
+                    <option value="all">Todo o histórico</option>
+                  </select>
+                  <div id="history-custom-period-fields" class="custom-period-fields is-hidden">
+                    <input id="history-period-start" type="date" aria-label="Data inicial do histórico" />
+                    <input id="history-period-end" type="date" aria-label="Data final do histórico" />
+                  </div>
+                  <span id="history-count" class="count-badge">0</span>
+                </div>
+              </div>
+              <div id="history-list" class="history-result-list"></div>
+            </article>
+          </section>
+
+          <section id="view-archive" class="view">
+            <article class="panel table-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">ORGANIZAÇÃO</p>
+                  <h2>Oportunidades arquivadas</h2>
+                  <p class="muted">Itens retirados da rotina diária, com histórico preservado e possibilidade de restauração.</p>
+                </div>
+                <div class="archive-total-summary" aria-live="polite">
+                  <span>Total arquivado</span>
+                  <strong id="archive-count">0</strong>
+                </div>
+              </div>
+              <div id="archive-list" class="archive-list"></div>
+            </article>
+          </section>
+
+          <section id="view-tutorials" class="view">
+            <div class="tutorials-heading">
+              <div>
+                <p class="eyebrow">CENTRAL DE AJUDA</p>
+                <h2>🎓 Tutoriais</h2>
+                <p class="muted">Aprenda a usar o sistema assistindo aos vídeos disponibilizados para a equipe.</p>
+              </div>
+            </div>
+
+            <div class="tutorial-tabs" role="tablist" aria-label="Tutoriais">
+              <button id="tutorial-watch-tab" class="tutorial-tab is-active" type="button" data-tutorial-tab="watch">
+                ▶ Assistir vídeos
+              </button>
+              <button id="tutorial-manage-tab" class="tutorial-tab is-hidden" type="button" data-tutorial-tab="manage">
+                ⚙ Gerenciar
+              </button>
+            </div>
+
+            <div id="tutorial-watch-panel" class="tutorial-tab-panel is-active">
+              <div id="tutorial-category-filters" class="tutorial-category-filters"></div>
+              <div id="tutorial-video-grid" class="tutorial-video-grid"></div>
+            </div>
+
+            <div id="tutorial-manage-panel" class="tutorial-tab-panel">
+              <article class="panel tutorial-manager-card">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">CONTEÚDO</p>
+                    <h2 id="tutorial-form-title">Adicionar vídeo</h2>
+                  </div>
+                </div>
+                <form id="tutorial-form" class="tutorial-form">
+                  <input id="tutorial-edit-id" type="hidden" />
+                  <label class="tutorial-field tutorial-field-wide">
+                    Link do YouTube *
+                    <input id="tutorial-youtube-url" type="url" placeholder="https://www.youtube.com/watch?v=... ou https://youtu.be/..." required />
+                    <small>Para acesso por link, publique no YouTube como “Não listado”. Vídeos privados não reproduzem para outros usuários.</small>
+                  </label>
+                  <label class="tutorial-field tutorial-field-wide">
+                    Título do vídeo *
+                    <input id="tutorial-title" type="text" maxlength="120" placeholder="Ex.: Como atender um lead" required />
+                  </label>
+                  <label class="tutorial-field tutorial-field-wide">
+                    Descrição (opcional)
+                    <textarea id="tutorial-description" rows="3" maxlength="800" placeholder="Breve descrição do que o vídeo ensina..."></textarea>
+                  </label>
+                  <label class="tutorial-field">
+                    Categoria
+                    <input id="tutorial-category" type="text" maxlength="60" value="Geral" placeholder="Geral" />
+                  </label>
+                  <label class="tutorial-field">
+                    Ordem de exibição
+                    <input id="tutorial-order" type="number" step="1" value="0" />
+                    <small>Menor número aparece primeiro.</small>
+                  </label>
+                  <label class="settings-toggle-row tutorial-active-field">
+                    <input id="tutorial-active" type="checkbox" checked />
+                    <span>Vídeo ativo para a equipe</span>
+                  </label>
+                  <div class="tutorial-form-actions">
+                    <button id="tutorial-submit" class="button button-primary" type="submit">+ Adicionar vídeo</button>
+                    <button id="tutorial-cancel-edit" class="button button-ghost is-hidden" type="button">Cancelar edição</button>
+                  </div>
+                </form>
+              </article>
+
+              <article class="panel tutorial-list-card">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">BIBLIOTECA</p>
+                    <h2>Vídeos cadastrados</h2>
+                  </div>
+                  <span id="tutorial-manage-count" class="count-badge">0</span>
+                </div>
+                <div id="tutorial-manage-list" class="tutorial-manage-list"></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="view-settings" class="view">
+            <div class="settings-grid">
+              <article class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">INTEGRAÇÃO</p>
+                    <h2>Configuração do CRM</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Inicialize os atributos comerciais no Chatwoot para armazenar etapa, valor,
+                  tarefa e motivo de perda diretamente em cada conversa.
+                </p>
+                <button id="bootstrap-crm" class="button button-primary">
+                  Inicializar atributos CRM
+                </button>
+                <div id="bootstrap-result" class="result-box"></div>
+              </article>
+
+
+              <article id="monthly-goal-settings-panel" class="panel is-hidden">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">META DA LOJA</p>
+                    <h2>Meta mensal de vendas</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Exibe no Dashboard o progresso da loja entre o primeiro e o último dia do mês.
+                  A meta começa desativada e pode ser ligada quando a equipe estiver pronta.
+                </p>
+                <form id="monthly-goal-settings-form" class="monthly-goal-settings-form">
+                  <label class="settings-toggle-row">
+                    <input id="monthly-goal-enabled" type="checkbox" />
+                    <span>Exibir a meta mensal no Dashboard</span>
+                  </label>
+                  <label>
+                    Meta mensal de vendas
+                    <input id="monthly-goal-target" type="number" min="1" max="100000" step="1" placeholder="Ex.: 50" />
+                  </label>
+                  <button class="button button-primary" type="submit">Salvar meta mensal</button>
+                </form>
+                <div id="monthly-goal-settings-result" class="result-box"></div>
+              </article>
+
+              <article id="pipeline-settings-panel" class="panel pipeline-settings-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">PIPELINE</p>
+                    <h2>Etapas comerciais</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Edite nomes e cores, altere a ordem ou crie novas etapas. Etapas com oportunidades não podem ser arquivadas ou excluídas.
+                </p>
+                <div id="stage-manager-list" class="stage-manager-list"></div>
+                <form id="stage-manager-form" class="stage-manager-form">
+                  <input id="new-stage-name" type="text" maxlength="60" placeholder="Nome da nova etapa" required />
+                  <input id="new-stage-color" type="color" value="#6366f1" aria-label="Cor da nova etapa" />
+                  <button class="button button-primary" type="submit">Adicionar etapa</button>
+                </form>
+              </article>
+
+              <article id="user-management-panel" class="panel is-hidden">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">EQUIPE</p>
+                    <h2>Usuários e permissões</h2>
+                  </div>
+                </div>
+                <p class="muted">
+                  Vincule cada acesso ao agente correspondente no Chatwoot. O servidor entrega somente
+                  os leads permitidos pelo escopo operacional.
+                </p>
+                <form id="crm-user-form" class="crm-user-form crm-user-form-operational">
+                  <input id="crm-user-name" type="text" maxlength="80" placeholder="Nome do usuário" required />
+                  <input id="crm-user-email" type="email" placeholder="E-mail" required />
+                  <input id="crm-user-password" type="password" minlength="10" placeholder="Senha inicial (mín. 10)" required />
+                  <select id="crm-user-role" aria-label="Função operacional">
+                    <option value="sdr">SDR</option>
+                    <option value="seller">Vendedor</option>
+                    <option value="manager">Gerente</option>
+                    <option value="viewer">Somente leitura</option>
+                    <option value="admin">Administrador</option>
+                  </select>
+                  <select id="crm-user-agent" aria-label="Agente vinculado no Chatwoot">
+                    <option value="">Selecione o agente do Chatwoot</option>
+                  </select>
+                  <select id="crm-user-scope" aria-label="Escopo de visualização">
+                    <option value="unassigned_and_mine">Fila SDR + meus leads</option>
+                    <option value="mine">Somente meus leads</option>
+                    <option value="all">Todos os leads</option>
+                    <option value="unassigned">Somente sem responsável</option>
+                  </select>
+                  <button id="crm-user-submit" class="button button-primary" type="submit">Criar usuário</button>
+                </form>
+                <div id="crm-users-list" class="crm-users-list"></div>
+              </article>
+
+              <article id="audit-panel" class="panel is-hidden">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">AUDITORIA</p>
+                    <h2>Atividade recente</h2>
+                  </div>
+                  <button id="refresh-administration" class="text-button" type="button">Atualizar</button>
+                </div>
+                <p class="muted">
+                  Registro central de acessos, alterações no pipeline, usuários, filtros e oportunidades.
+                </p>
+                <div id="audit-list" class="audit-list"></div>
+              </article>
+
+              <article class="panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">SESSÃO</p>
+                    <h2>Conta conectada</h2>
+                  </div>
+                </div>
+                <dl class="definition-list">
+                  <div><dt>Organização</dt><dd id="settings-organization-name">—</dd></div>
+                  <div><dt>Usuário</dt><dd id="settings-current-user">—</dd></div>
+                  <div><dt>Escopo operacional</dt><dd id="settings-current-scope">—</dd></div>
+                  <div><dt>Agente vinculado</dt><dd id="settings-linked-agent">—</dd></div>
+                  <div><dt>Conta Chatwoot</dt><dd id="settings-account-id">—</dd></div>
+                  <div><dt>Sincronização</dt><dd>Automática a cada 60s + manual</dd></div>
+                  <div><dt>Credencial Chatwoot</dt><dd>Criptografada no servidor</dd></div>
+                  <div><dt>Configurações</dt><dd>Compartilhadas no banco central</dd></div>
+                </dl>
+                <button id="logout-button" class="button button-danger">Sair da conta</button>
+              </article>
+            </div>
+          </section>
+        </main>
       </div>
     </div>
 
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="loading-overlay loading-hidden">
-      <div class="loading-spinner">
-        <div class="spinner"></div>
-        <p>Carregando conversas...</p>
-      </div>
+    <aside id="opportunity-drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-backdrop" data-close-drawer></div>
+      <section class="drawer-panel" aria-label="Detalhes da oportunidade">
+        <header class="drawer-header">
+          <div>
+            <p id="drawer-conversation-id" class="eyebrow">CONVERSA</p>
+            <h2 id="drawer-contact-name">Contato</h2>
+            <p id="drawer-contact-meta" class="muted"></p>
+          </div>
+          <button class="icon-button" data-close-drawer aria-label="Fechar">×</button>
+        </header>
+
+        <div class="drawer-body">
+          <section class="drawer-section">
+            <div id="drawer-intervention-panel" class="drawer-intervention-panel is-hidden">
+              <div>
+                <span class="intervention-kicker">⚠ INTERVENÇÃO HUMANA</span>
+                <strong id="drawer-intervention-title">Ação humana necessária</strong>
+                <small id="drawer-intervention-description">
+                  O fluxo foi pausado por uma etiqueta operacional.
+                </small>
+              </div>
+              <div class="intervention-actions">
+                <button id="assume-intervention" type="button" class="button button-primary button-small">
+                  Assumir atendimento
+                </button>
+                <button id="resolve-intervention" type="button" class="button button-ghost button-small">
+                  Resolver e liberar fluxo
+                </button>
+              </div>
+            </div>
+            <div id="drawer-handoff-panel" class="drawer-handoff-panel">
+              <div>
+                <span class="field-caption">Encaminhamento</span>
+                <small id="drawer-handoff-helper">Transfira esta oportunidade conforme as permissões do seu perfil.</small>
+              </div>
+              <button id="open-handoff" type="button" class="button button-ghost button-small">
+                Encaminhar atendimento
+              </button>
+            </div>
+            <div class="field-grid">
+              <label>
+                Etapa comercial
+                <select id="drawer-stage"></select>
+              </label>
+              <label>
+                Valor da oportunidade
+                <input id="drawer-value" type="number" min="0" step="0.01" placeholder="0,00" />
+              </label>
+              <label>
+                Prioridade
+                <select id="drawer-priority">
+                  <option value="none">Sem prioridade</option>
+                  <option value="low">Baixa</option>
+                  <option value="medium">Média</option>
+                  <option value="high">Alta</option>
+                  <option value="urgent">Urgente</option>
+                </select>
+              </label>
+              <label>
+                Responsável
+                <select id="drawer-assignee"></select>
+              </label>
+              <label>
+                Time
+                <select id="drawer-team"></select>
+              </label>
+              <label>
+                Próxima tarefa
+                <input id="drawer-task" type="text" placeholder="Ex.: ligar para o cliente" />
+              </label>
+              <label>
+                Prazo
+                <input id="drawer-due-date" type="date" />
+              </label>
+              <label class="checkbox-label">
+                <input id="drawer-task-done" type="checkbox" />
+                Tarefa concluída
+              </label>
+              <div class="task-state-panel">
+                <span class="field-caption">Situação da tarefa</span>
+                <strong id="drawer-task-state">Sem tarefa</strong>
+                <small id="drawer-task-completed-at"></small>
+              </div>
+            </div>
+            <label id="loss-reason-field" class="is-hidden">
+              Motivo da perda
+              <textarea id="drawer-loss-reason" rows="2"></textarea>
+            </label>
+            <div class="drawer-label-area">
+              <div class="label-editor-heading">
+                <div>
+                  <span class="field-caption">Etiquetas do Chatwoot</span>
+                  <small>As automações continuam aplicando etiquetas normalmente. Aqui você pode complementar ou remover manualmente.</small>
+                </div>
+                <button id="toggle-label-editor" type="button" class="button button-ghost button-small">Editar etiquetas</button>
+              </div>
+              <div id="drawer-labels" class="label-row"></div>
+              <div id="drawer-label-editor" class="label-editor is-hidden">
+                <label class="label-search-field">
+                  Buscar etiqueta
+                  <input id="drawer-label-search" type="search" placeholder="Digite o nome da etiqueta" autocomplete="off" />
+                </label>
+                <div id="drawer-label-options" class="label-options" role="group" aria-label="Etiquetas disponíveis"></div>
+                <div class="label-editor-actions">
+                  <button id="save-labels" type="button" class="button button-primary button-small">Salvar etiquetas</button>
+                  <button id="cancel-labels" type="button" class="button button-ghost button-small">Cancelar</button>
+                </div>
+              </div>
+            </div>
+            <div class="drawer-actions">
+              <button id="save-opportunity" class="button button-primary">Salvar alterações</button>
+              <button id="open-chatwoot" class="button button-ghost">Abrir no Chatwoot</button>
+              <button id="archive-opportunity" class="button button-danger is-hidden" type="button">Arquivar oportunidade</button>
+            </div>
+          </section>
+
+          <section class="drawer-section conversation-section">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">HISTÓRICO</p>
+                <h3>Conversa</h3>
+              </div>
+              <div class="history-actions">
+                <button
+                  id="toggle-system-events"
+                  class="text-button history-toggle is-hidden"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  Mostrar atividades
+                </button>
+                <button id="reload-messages" class="text-button" type="button">Atualizar</button>
+              </div>
+            </div>
+            <p class="history-helper">
+              Mensagens ficam em destaque. Etiquetas, atribuições e mudanças de status ficam separadas em “Atividades”.
+            </p>
+            <div id="message-thread" class="message-thread"></div>
+            <form id="reply-form" class="reply-box">
+              <textarea id="reply-content" rows="3" placeholder="Digite uma mensagem..."></textarea>
+              <div class="reply-footer">
+                <label class="checkbox-label">
+                  <input id="reply-private" type="checkbox" />
+                  Nota privada
+                </label>
+                <button id="reply-submit" class="button button-primary" type="submit">Enviar</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+    </aside>
+
+    <div id="reactivation-manual-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-reactivation-manual></div>
+      <section class="modal-card reactivation-modal-card" role="dialog" aria-modal="true" aria-labelledby="reactivation-manual-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">INCLUSÃO MANUAL</p>
+            <h2 id="reactivation-manual-title">Adicionar contato existente</h2>
+            <p class="muted">A inclusão manual ignora apenas a exigência das etiquetas elegíveis. A proteção de reativação única continua obrigatória.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-reactivation-manual aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Buscar contato ou conversa
+          <input id="reactivation-manual-search" type="search" placeholder="Nome, telefone ou ID da conversa" />
+        </label>
+        <div id="reactivation-manual-results" class="reactivation-manual-results"></div>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-reactivation-manual>Fechar</button>
+        </div>
+      </section>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <div id="reactivation-preview-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-reactivation-preview></div>
+      <section class="modal-card reactivation-preview-card" role="dialog" aria-modal="true" aria-labelledby="reactivation-preview-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">CONFIRMAÇÃO OBRIGATÓRIA</p>
+            <h2 id="reactivation-preview-title">Revisar reativação</h2>
+            <p class="muted">O servidor valida novamente cada lead antes de colocá-lo na fila.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-reactivation-preview aria-label="Fechar">×</button>
+        </div>
+        <div class="reactivation-preview-summary">
+          <div><span>Selecionados</span><strong id="reactivation-preview-selected">0</strong></div>
+          <div><span>Elegíveis na prévia</span><strong id="reactivation-preview-eligible">0</strong></div>
+          <div><span>Bloqueados</span><strong id="reactivation-preview-blocked">0</strong></div>
+        </div>
+        <div class="reactivation-preview-message">
+          <span>Exemplo da mensagem</span>
+          <p id="reactivation-preview-message"></p>
+        </div>
+        <div id="reactivation-preview-warning" class="reactivation-warning is-hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-reactivation-preview>Voltar e revisar</button>
+          <button id="reactivation-confirm" type="button" class="button button-primary">Confirmar e enviar</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="tutorial-player-modal" class="modal tutorial-player-modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-tutorial-player></div>
+      <section class="tutorial-player-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-player-title">
+        <header class="tutorial-player-header">
+          <div>
+            <p class="eyebrow">TUTORIAL</p>
+            <h2 id="tutorial-player-title">Vídeo</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-tutorial-player aria-label="Fechar">×</button>
+        </header>
+        <div class="tutorial-player-frame">
+          <iframe
+            id="tutorial-player-iframe"
+            title="Player do tutorial"
+            src="about:blank"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen
+          ></iframe>
+        </div>
+        <p id="tutorial-player-description" class="muted tutorial-player-description"></p>
+      </section>
+    </div>
+
+    <div id="transition-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-transition></div>
+      <form id="transition-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">FECHAMENTO</p>
+            <h2 id="transition-modal-title">Atualizar oportunidade</h2>
+            <p id="transition-modal-description" class="muted"></p>
+          </div>
+          <button type="button" class="icon-button" data-close-transition aria-label="Fechar">×</button>
+        </div>
+        <label id="transition-value-field">
+          Valor final da venda
+          <input id="transition-value" type="number" min="0.01" step="0.01" placeholder="0,00" />
+        </label>
+        <label id="transition-reason-field" class="is-hidden">
+          Motivo da perda
+          <textarea id="transition-reason" rows="4" placeholder="Ex.: sem entrada, desistiu, comprou em outra loja"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-transition>Cancelar</button>
+          <button id="transition-confirm" type="submit" class="button button-primary">Confirmar</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="handoff-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-handoff></div>
+      <form id="handoff-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">ENCAMINHAMENTO CONTROLADO</p>
+            <h2>Encaminhar oportunidade</h2>
+            <p id="handoff-description" class="muted">Selecione a ação permitida para seu perfil.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-handoff aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Ação
+          <select id="handoff-action" required></select>
+        </label>
+        <label id="handoff-target-field">
+          Destino
+          <select id="handoff-target"></select>
+        </label>
+        <label>
+          Motivo
+          <select id="handoff-reason-select" required>
+            <option value="">Selecione o motivo</option>
+            <option value="Lead atribuído por engano">Lead atribuído por engano</option>
+            <option value="Faltam dados de qualificação">Faltam dados de qualificação</option>
+            <option value="Condição comercial especial">Condição comercial especial</option>
+            <option value="Cliente já atendido por outra pessoa">Cliente já atendido por outra pessoa</option>
+            <option value="Reclamação ou conflito">Reclamação ou conflito</option>
+            <option value="Ausência ou indisponibilidade">Ausência ou indisponibilidade</option>
+            <option value="Outro">Outro</option>
+          </select>
+        </label>
+        <label id="handoff-reason-detail-field" class="is-hidden">
+          Detalhe do motivo
+          <textarea id="handoff-reason-detail" rows="3" maxlength="500" placeholder="Explique brevemente"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-handoff>Cancelar</button>
+          <button id="handoff-confirm" type="submit" class="button button-primary">Confirmar encaminhamento</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="archive-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-archive></div>
+      <form id="archive-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">SEGURANÇA</p>
+            <h2>Arquivar lead?</h2>
+            <p id="archive-description" class="muted">O card sairá da rotina diária, mas o histórico será preservado.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-archive aria-label="Fechar">×</button>
+        </div>
+        <div class="archive-warning">Esta ação não apaga nenhuma conversa no Chatwoot. Leads de teste, cadastros incorretos e itens sem valor operacional também ocultam outras conversas do mesmo contato.</div>
+        <label>
+          Motivo do arquivamento
+          <select id="archive-reason" required>
+            <option value="">Selecione o motivo</option>
+            <option value="Lead de teste">Lead de teste</option>
+            <option value="Duplicado">Duplicado</option>
+            <option value="Cadastro incorreto">Cadastro incorreto</option>
+            <option value="Sem valor operacional">Sem valor operacional</option>
+            <option value="Outro">Outro</option>
+          </select>
+        </label>
+        <p id="archive-scope-hint" class="muted">Selecione o motivo para ver o alcance do arquivamento.</p>
+        <label>
+          Observação opcional
+          <textarea id="archive-note" rows="3" maxlength="500" placeholder="Contexto para futura consulta"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-archive>Cancelar</button>
+          <button id="archive-confirm" type="submit" class="button button-danger">Arquivar lead</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="redistribution-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-redistribution></div>
+      <form id="redistribution-form" class="modal-card">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">REDISTRIBUIÇÃO</p>
+            <h2>Resolver solicitação</h2>
+            <p id="redistribution-description" class="muted"></p>
+          </div>
+          <button type="button" class="icon-button" data-close-redistribution aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Novo responsável
+          <select id="redistribution-target"></select>
+        </label>
+        <label>
+          Observação da gestão
+          <textarea id="redistribution-note" rows="3" maxlength="500"></textarea>
+        </label>
+        <div class="modal-actions modal-actions-split">
+          <button id="redistribution-reject" type="button" class="button button-danger">Rejeitar</button>
+          <div>
+            <button type="button" class="button button-ghost" data-close-redistribution>Cancelar</button>
+            <button id="redistribution-approve" type="submit" class="button button-primary">Aprovar e transferir</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay is-hidden">
+      <div class="spinner"></div>
+      <p id="loading-message">Carregando dados...</p>
+    </div>
+
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
     <script src="script.js"></script>
   </body>
 </html>

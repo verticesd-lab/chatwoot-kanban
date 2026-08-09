@@ -1,16 +1,23 @@
 {
-  "name": "chatwoot-kanban",
-  "version": "1.0.0",
-  "description": "Kanban para Chatwoot com proxy para contornar CORS",
-  "main": "server.js",
+  "name": "chatwoot-kanban-crm",
+  "version": "1.3.6",
+  "description": "CRM operacional centralizado sobre o Chatwoot com reativação manual controlada, tutoriais e supressão de leads arquivados",
+  "main": "src/server.js",
   "scripts": {
-    "start": "nodemon --inspect src/server.js"
+    "start": "node src/server.js",
+    "dev": "nodemon --inspect src/server.js",
+    "check": "node --check src/access-control.js && node --check src/contact-suppression.js && node --check src/reactivation.js && node --check src/db.js && node --check src/server.js && node --check src/script.js",
+    "test": "node tests/foundation.test.js && node tests/operational-scope.test.js && node tests/operational-control.test.js && node tests/tutorials.test.js && node tests/contact-suppression.test.js && node tests/reactivation.test.js && node tests/static-contract.test.js"
   },
   "dependencies": {
     "axios": "^1.4.0",
-    "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^4.18.2",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
     "nodemon": "^3.1.10"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }

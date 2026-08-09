@@ -1,0 +1,110 @@
+const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const suppression = require("../src/contact-suppression");
+
+const conversations = [
+  {
+    id: 65,
+    meta: { sender: { id: 1001, phone_number: "+55 47 9755-2704", name: "Jader" } },
+  },
+  {
+    id: 195,
+    meta: { sender: { id: 1001, phone_number: "554797552704", name: "Jader | Grupo VR" } },
+  },
+  {
+    id: 67,
+    meta: { sender: { id: 1002, phone_number: "+55 48 98173-560", name: "Antonio" } },
+  },
+  {
+    id: 194,
+    meta: { sender: { id: 1002, phone_number: "+55 48 98173-560", name: "Antonio Grupo VR" } },
+  },
+  {
+    id: 300,
+    meta: { sender: { id: 1003, phone_number: "+55 48 99999-0000", name: "Cliente real" } },
+  },
+  {
+    id: 301,
+    meta: { sender: { id: 1003, phone_number: "+55 48 99999-0000", name: "Cliente real" } },
+  },
+];
+
+assert.strictEqual(
+  suppression.contactIdentity(conversations[0]),
+  suppression.contactIdentity(conversations[1]),
+  "Conversas do mesmo telefone precisam compartilhar a mesma identidade"
+);
+
+const legacyArchived = [
+  { conversationId: 65, reason: "Lead de teste", archiveScope: "conversation", contactKey: "" },
+  { conversationId: 194, reason: "Sem valor operacional", archiveScope: "conversation", contactKey: "" },
+];
+
+const legacyKeys = suppression.archivedContactKeys(conversations, legacyArchived);
+assert(legacyKeys.has(suppression.contactIdentity(conversations[1])));
+assert(legacyKeys.has(suppression.contactIdentity(conversations[2])));
+
+const activeAfterLegacySuppression = conversations.filter(
+  (conversation) => !legacyKeys.has(suppression.contactIdentity(conversation))
+);
+assert.deepStrictEqual(
+  activeAfterLegacySuppression.map((item) => item.id),
+  [300, 301],
+  "Lead arquivado por motivo de descarte precisa retirar todas as conversas do mesmo contato"
+);
+
+const duplicateOnly = [
+  { conversationId: 300, reason: "Duplicado", archiveScope: "conversation", contactKey: "" },
+];
+const duplicateKeys = suppression.archivedContactKeys(conversations, duplicateOnly);
+assert.strictEqual(
+  duplicateKeys.size,
+  0,
+  "Arquivar uma conversa duplicada não pode ocultar o contato inteiro"
+);
+
+const explicitContactArchive = [
+  {
+    conversationId: 300,
+    reason: "Outro",
+    archiveScope: "contact",
+    contactKey: suppression.contactIdentity(conversations.find((item) => item.id === 300)),
+  },
+];
+const explicitKeys = suppression.archivedContactKeys(conversations, explicitContactArchive);
+assert(explicitKeys.has(suppression.contactIdentity(conversations.find((item) => item.id === 301))));
+
+// Persiste o novo escopo no banco e garante que a migração V1.3.5 funciona.
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-suppression-test-"));
+process.env.CRM_DB_PATH = path.join(tempDir, "crm.sqlite");
+process.env.CRM_ENCRYPTION_KEY = "chave-de-teste-com-mais-de-24-caracteres";
+process.env.CRM_ORGANIZATION_NAME = "Loja Supressao";
+process.env.CRM_ADMIN_NAME = "Administrador";
+process.env.CRM_ADMIN_EMAIL = "admin-suppression@example.com";
+process.env.CRM_ADMIN_PASSWORD = "senha-segura-123";
+process.env.CHATWOOT_ACCOUNT_ID = "4";
+process.env.CHATWOOT_API_TOKEN = "token-chatwoot-teste";
+
+const db = require("../src/db");
+try {
+  db.bootstrapFromEnv("https://chat.example.com");
+  const admin = db.authenticate("admin-suppression@example.com", "senha-segura-123");
+  const archived = db.archiveOpportunity({
+    organizationId: admin.organization_id,
+    conversationId: 900,
+    actorUserId: admin.id,
+    reason: "Lead de teste",
+    archiveScope: "contact",
+    contactKey: "phone:5547999990000",
+  });
+  assert.strictEqual(archived.archiveScope, "contact");
+  assert.strictEqual(archived.contactKey, "phone:5547999990000");
+  assert.strictEqual(db.listArchivedOpportunities(admin.organization_id).length, 1);
+} finally {
+  db.closeDatabase();
+  fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}
+
+console.log("CRM V1.3.5 contact suppression tests: OK");

@@ -1,275 +1,99 @@
-# Chatwoot Kanban - Sistema de Gerenciamento de Conversas
+# Kanban CRM — Chatwoot Connected CRM
 
-## 📋 Descrição
-Sistema de interface Kanban para visualizar e gerenciar conversas do Chatwoot. Permite organizar conversas por status (Pendente, Em Aberto, Adiado, Resolvido) usando uma interface drag-and-drop moderna e responsiva.
+CRM comercial visual conectado ao Chatwoot. A interface mantém as conversas, mensagens, contatos, agentes, times, caixas e etiquetas no Chatwoot, enquanto organiza a operação comercial em um pipeline independente.
 
-## ✨ Funcionalidades Principais
+## Versão atual: V1.3.6 — reativação manual controlada
 
-### 🎯 Interface Kanban
-- **Visualização por Status**: Conversas organizadas em colunas por status
-- **Drag & Drop**: Mova conversas entre colunas para alterar status automaticamente
-- **Contadores Dinâmicos**: Cada coluna mostra a quantidade de conversas em tempo real
-- **Interface Responsiva**: Funciona perfeitamente em desktop e mobile
 
-### 🔐 Segurança e Usabilidade
-- **Toggle de Visibilidade**: Botão para mostrar/esconder o token de API
-- **Persistência Local**: Token e Account ID salvos automaticamente no localStorage
-- **Validação de Dados**: Verificações robustas de integridade dos dados
-- **Tratamento de Erros**: Mensagens claras e logs detalhados para debugging
+A V1.3.6 preserva as fundações anteriores e adiciona uma central de **Reativação** com seleção por etiquetas, inclusão manual de contatos existentes, templates editáveis, prévia obrigatória, fila persistente de envio, bloqueio de reativação única, auditoria e métricas de resposta. Consulte [CRM_V1.3.6_README.md](CRM_V1.3.6_README.md).
 
-### 🚀 Performance e UX
-- **Loading de Tela Inteira**: Overlay profissional com spinner animado durante carregamento
-- **Busca Multi-Status**: Recupera conversas de todos os status (pending, open, resolved, snoozed)
-- **Detalhes Completos**: Modal com informações detalhadas da conversa e histórico de mensagens
-- **Priorização Visual**: Cores diferentes baseadas no tempo de espera
+### Base operacional preservada da V1.3.3
 
-## 🛠️ Tecnologias Utilizadas
+A V1.3.3 preserva os escopos da V1.3.2 e acrescenta:
 
-### Frontend
-- **HTML5**: Estrutura semântica moderna
-- **CSS3**: Variáveis CSS, Flexbox, Grid, animações
-- **JavaScript ES6+**: Async/await, destructuring, optional chaining
-- **Font Awesome**: Ícones profissionais
-- **SortableJS**: Biblioteca para drag-and-drop
+- encaminhamento controlado por função e motivo obrigatório;
+- solicitações de redistribuição para a gestão;
+- arquivamento seguro com restauração;
+- presença online, ausente e offline;
+- Histórico separado para Ganho e Perdido;
+- filtro de encerrados por período;
+- carregamento progressivo de 50 cards por coluna;
+- correção definitiva de sobreposição e etiquetas;
+- auditoria de encaminhamentos, arquivos e restaurações.
 
-### Backend
-- **Node.js**: Runtime JavaScript
-- **Express.js**: Framework web minimalista
-- **Axios**: Cliente HTTP para requisições
-- **CORS**: Middleware para Cross-Origin Resource Sharing
-- **dotenv**: Gerenciamento de variáveis de ambiente
+Consulte [CRM_V1.3.3_README.md](CRM_V1.3.3_README.md) para o escopo e os testes desta versão. Os detalhes dos perfis e da fila de intervenção permanecem em [CRM_V1.3.2_README.md](CRM_V1.3.2_README.md).
 
-## 📁 Estrutura do Projeto
+## Funcionalidades operacionais preservadas
 
-```
-chatwoot-kanban/
-├── src/
-│   ├── index.html          # Interface principal
-│   ├── script.js           # Lógica JavaScript
-│   ├── styles.css          # Estilos CSS
-│   └── server.js           # Servidor proxy Node.js
-├── .env                    # Variáveis de ambiente (não versionado)
-├── .gitignore             # Arquivos ignorados pelo Git
-├── package.json           # Dependências e scripts
-├── package-lock.json      # Lock das dependências
-└── README.md              # Esta documentação
-```
+- dashboard comercial;
+- pipeline drag-and-drop;
+- etapas configuráveis;
+- valor da oportunidade;
+- ganho e perda com validação;
+- tarefas, prazos e conclusão;
+- busca e filtros;
+- agente, time, caixa, prioridade e etiquetas;
+- painel lateral com histórico;
+- mensagens públicas e notas privadas;
+- abertura direta da conversa no Chatwoot;
+- atualização automática.
 
-## 🚀 Como Usar
+## Requisitos
 
-### 1. Instalação
+- Node.js 22.5 ou superior;
+- npm;
+- uma conta Chatwoot acessível pela API;
+- diretório persistente para o banco em produção.
+
+## Instalação
+
 ```bash
-# Clone o repositório
-git clone <repository-url>
-cd chatwoot-kanban
-
-# Instale as dependências
-npm install
-
-# Configure as variáveis de ambiente
 cp .env.example .env
-# Edite o arquivo .env com sua BASE_URL do Chatwoot
+npm install
+npm run check
+npm test
+npm run dev
 ```
 
-### 2. Configuração
-1. Crie um arquivo `.env` na raiz do projeto:
-```env
-BASE_URL=sua-instancia.chatwoot.com
-PORT=3000
+Acesse:
+
+```text
+http://localhost:3000
 ```
 
-2. Inicie o servidor:
-```bash
-npm start
+## Estrutura
+
+```text
+src/
+├── access-control.js # escopos, intervenções e prioridade operacional
+├── db.js             # banco central, autenticação, perfis, reativação e auditoria
+├── reactivation.js   # regras puras da reativação, templates e elegibilidade
+├── server.js         # API do CRM e proxy seguro para o Chatwoot
+├── index.html        # interface
+├── script.js         # comportamento do painel
+└── styles.css        # apresentação
+
+tests/
+├── foundation.test.js
+├── operational-scope.test.js
+├── operational-control.test.js
+└── static-contract.test.js
 ```
 
-3. Acesse `http://localhost:3000` no navegador
+## Separação de responsabilidades
 
-### 3. Uso da Interface
-1. **Insira suas credenciais**:
-   - Token de API do Chatwoot
-   - ID da Conta
-   - Use o botão 👁️ para mostrar/esconder o token
+**Chatwoot:** contatos, conversas, mensagens, agentes, times, caixas e etiquetas.
 
-2. **Carregue os dados**:
-   - Clique em "Atualizar" para buscar conversas
-   - Aguarde o loading de tela inteira
+**Kanban CRM:** usuários, permissões, pipeline, etapas, filtros, auditoria e gestão comercial.
 
-3. **Gerencie conversas**:
-   - Arraste conversas entre colunas para alterar status
-   - Clique em uma conversa para ver detalhes completos
-   - Observe os contadores atualizarem automaticamente
+Os atributos comerciais continuam sendo gravados nas conversas do Chatwoot para manter compatibilidade com a V1.2 e preservar os dados já validados.
 
-## 🔧 Principais Correções Implementadas
 
-### 1. Busca Multi-Status
-- **Problema**: API do Chatwoot só retornava conversas "open" por padrão
-- **Solução**: Implementada busca sequencial por todos os status
-```javascript
-const statuses = ["pending", "open", "resolved", "snoozed"];
-for (const status of statuses) {
-  // Busca individual por status
-}
-```
+## CRM V1.3.5
 
-### 2. Estrutura de Dados Robusta
-- **Problema**: Diferentes estruturas de resposta da API
-- **Solução**: Detecção automática da estrutura
-```javascript
-if (data.data && data.data.payload) {
-    return data.data.payload;
-}
-return data.data || data.payload || [];
-```
+Arquivamento de leads por contato para impedir que conversas antigas ou paralelas de leads de teste/sem valor operacional retornem ao Pipeline. Consulte `CRM_V1.3.5_README.md`.
 
-### 3. Tratamento de Timestamps
-- **Problema**: Timestamps Unix não convertidos corretamente
-- **Solução**: Conversão automática multiplicando por 1000
-```javascript
-if (conversation.created_at) {
-    createdAt = new Date(conversation.created_at * 1000);
-}
-```
 
-### 4. Acesso Seguro a Propriedades
-- **Problema**: Erros ao acessar propriedades aninhadas undefined
-- **Solução**: Optional chaining e fallbacks
-```javascript
-const senderName = conversation.meta?.sender?.name || 
-                  conversation.sender?.name || 
-                  `Cliente #${conversation.id}`;
-```
+## CRM V1.3.6
 
-### 5. Loading UX Melhorado
-- **Problema**: Textos "Carregando..." espalhados pelos cartões
-- **Solução**: Overlay de tela inteira com spinner profissional
-
-## 🎨 Tipos de Status Suportados
-
-| Status | Descrição | Cor |
-|--------|-----------|-----|
-| **pending** | Conversas pendentes | Padrão |
-| **open** | Conversas em aberto | Padrão |
-| **snoozed** | Conversas adiadas | Padrão |
-| **resolved** | Conversas resolvidas | Padrão |
-
-## 💬 Tipos de Mensagem Suportados
-
-| Tipo | Descrição | Estilo |
-|------|-----------|--------|
-| **Contact/User** | Mensagens do cliente | Fundo cinza claro, alinhado à esquerda |
-| **AgentBot** | Mensagens do bot | Fundo amarelo, centralizado |
-| **Agent** | Mensagens do atendente | Fundo azul, alinhado à direita |
-
-## 🔌 API do Chatwoot
-
-### Endpoints Utilizados
-```javascript
-// Listar conversas por status
-GET /api/v1/accounts/{account_id}/conversations?status={status}
-
-// Atualizar status da conversa
-POST /api/v1/accounts/{account_id}/conversations/{id}/status
-```
-
-### Headers Necessários
-```javascript
-{
-    'api_access_token': 'SEU_TOKEN_AQUI',
-    'Content-Type': 'application/json'
-}
-```
-
-### Proxy CORS
-O servidor Node.js atua como proxy para contornar limitações de CORS:
-```javascript
-// Todas as requisições /api/v1/* são redirecionadas para o Chatwoot
-app.use("/api/v1", async (req, res) => {
-  const chatwootUrl = `https://${process.env.BASE_URL}/api/v1${req.url}`;
-  // ... lógica do proxy
-});
-```
-
-## 🎯 Melhorias Implementadas
-
-### Interface e UX
-- ✅ **Design Responsivo**: Funciona em todos os dispositivos
-- ✅ **Loading Profissional**: Overlay de tela inteira com spinner
-- ✅ **Toggle de Senha**: Botão para mostrar/esconder token
-- ✅ **Persistência**: Credenciais salvas automaticamente
-- ✅ **Feedback Visual**: Contadores, animações, estados de hover
-
-### Funcionalidade
-- ✅ **Busca Completa**: Todos os status de conversa
-- ✅ **Drag & Drop**: Interface intuitiva para mudança de status
-- ✅ **Modal Detalhado**: Visualização completa das conversas
-- ✅ **Tratamento de Erros**: Logs detalhados e mensagens claras
-- ✅ **Validação Robusta**: Verificações de integridade dos dados
-
-### Performance
-- ✅ **Proxy Otimizado**: Servidor Node.js para contornar CORS
-- ✅ **Carregamento Assíncrono**: Busca paralela por status
-- ✅ **Cache Local**: localStorage para credenciais
-- ✅ **Animações Suaves**: Transições CSS otimizadas
-
-## 🐛 Debugging
-
-### Console Logs
-O sistema inclui logs detalhados no console do navegador:
-- Dados recebidos da API por status
-- Conversas agrupadas por status
-- Erros com stack trace completo
-- Status das requisições HTTP
-
-### Como Debugar
-1. Abra o Console do Navegador (F12)
-2. Clique em "Atualizar" para carregar conversas
-3. Observe as mensagens de log durante o carregamento
-4. Verifique erros de rede na aba Network
-
-## 🔮 Próximos Passos Sugeridos
-
-### Funcionalidades
-- [ ] Filtros por agente/equipe
-- [ ] Busca por texto nas conversas
-- [ ] Notificações em tempo real (WebSocket)
-- [ ] Métricas de performance e SLA
-- [ ] Exportação de relatórios
-
-### Melhorias Técnicas
-- [ ] Cache inteligente com TTL
-- [ ] Paginação para grandes volumes
-- [ ] Testes automatizados (Jest/Cypress)
-- [ ] Docker para deployment
-- [ ] CI/CD pipeline
-
-### UX/UI
-- [ ] Tema escuro
-- [ ] Atalhos de teclado
-- [ ] Arrastar múltiplas conversas
-- [ ] Filtros visuais avançados
-- [ ] Dashboard de métricas
-
-## 📄 Licença
-
-Este projeto está sob a licença MIT. Veja o arquivo LICENSE para mais detalhes.
-
-## 🤝 Contribuição
-
-Contribuições são bem-vindas! Por favor:
-1. Faça um fork do projeto
-2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
-3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
-4. Push para a branch (`git push origin feature/AmazingFeature`)
-5. Abra um Pull Request
-
----
-
-## 🙌 Apoie o Projeto
-Se este conteúdo te ajudou e você deseja contribuir para a continuidade dos projetos, você pode apoiar via Pix:
-
-📲 Chave Pix (e-mail): ricardompb@icloud.com
-
-Seu apoio faz toda a diferença! 💜
-
-**Desenvolvido com ❤️ para melhorar a gestão de conversas no Chatwoot**
+Central de reativação manual controlada para recuperar leads parados sem follow-up infinito. Consulte `CRM_V1.3.6_README.md`.
