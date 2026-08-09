@@ -911,12 +911,12 @@
         <div class="modal-header">
           <div>
             <p class="eyebrow">SEGURANÇA</p>
-            <h2>Arquivar oportunidade?</h2>
+            <h2>Arquivar lead?</h2>
             <p id="archive-description" class="muted">O card sairá da rotina diária, mas o histórico será preservado.</p>
           </div>
           <button type="button" class="icon-button" data-close-archive aria-label="Fechar">×</button>
         </div>
-        <div class="archive-warning">Esta ação não apaga a conversa no Chatwoot. A oportunidade poderá ser restaurada.</div>
+        <div class="archive-warning">Esta ação não apaga nenhuma conversa no Chatwoot. Leads de teste, cadastros incorretos e itens sem valor operacional também ocultam outras conversas do mesmo contato.</div>
         <label>
           Motivo do arquivamento
           <select id="archive-reason" required>
@@ -928,13 +928,14 @@
             <option value="Outro">Outro</option>
           </select>
         </label>
+        <p id="archive-scope-hint" class="muted">Selecione o motivo para ver o alcance do arquivamento.</p>
         <label>
           Observação opcional
           <textarea id="archive-note" rows="3" maxlength="500" placeholder="Contexto para futura consulta"></textarea>
         </label>
         <div class="modal-actions">
           <button type="button" class="button button-ghost" data-close-archive>Cancelar</button>
-          <button id="archive-confirm" type="submit" class="button button-danger">Arquivar oportunidade</button>
+          <button id="archive-confirm" type="submit" class="button button-danger">Arquivar lead</button>
         </div>
       </form>
     </div>

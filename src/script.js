@@ -3370,6 +3370,22 @@ function renderArchive() {
   }
 }
 
+function archiveScopeForReason(reason) {
+  return ["Lead de teste", "Cadastro incorreto", "Sem valor operacional"].includes(
+    String(reason || "").trim()
+  )
+    ? "contact"
+    : "conversation";
+}
+
+function updateArchiveScopeHint() {
+  if (!elements.archiveScopeHint || !elements.archiveReason) return;
+  const scope = archiveScopeForReason(elements.archiveReason.value);
+  elements.archiveScopeHint.textContent = scope === "contact"
+    ? "Este motivo retira também outras conversas do mesmo contato da área de trabalho. O histórico continua preservado."
+    : "Este motivo arquiva somente esta conversa. Outras conversas do mesmo contato continuam disponíveis.";
+}
+
 function openArchiveModal(conversationId = state.currentConversationId) {
   if (!hasPermission("archive:manage")) return;
   const conversation = findConversationById(conversationId);
@@ -3379,6 +3395,7 @@ function openArchiveModal(conversationId = state.currentConversationId) {
   elements.archiveDescription.textContent = `${sender.name || `Conversa #${conversation.id}`} · #${conversation.id}. O histórico continuará disponível.`;
   elements.archiveReason.value = "";
   elements.archiveNote.value = "";
+  updateArchiveScopeHint();
   elements.archiveModal.classList.add("is-open");
   elements.archiveModal.setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
@@ -3396,6 +3413,7 @@ async function submitArchive(event) {
   const conversationId = state.pendingArchiveConversationId;
   const reason = elements.archiveReason.value;
   const note = elements.archiveNote.value.trim();
+  const scope = archiveScopeForReason(reason);
   if (!conversationId || !reason) {
     showToast("Selecione o motivo do arquivamento.", "error");
     return;
@@ -3409,11 +3427,16 @@ async function submitArchive(event) {
   try {
     await apiRequest(`/api/crm/opportunities/${conversationId}/archive`, {
       method: "POST",
-      body: JSON.stringify({ reason, note }),
+      body: JSON.stringify({ reason, note, scope }),
     });
     closeArchiveModal();
     if (state.currentConversationId === conversationId) closeOpportunityDrawer();
-    showToast("Oportunidade arquivada com histórico preservado.", "success");
+    showToast(
+      scope === "contact"
+        ? "Lead arquivado. Outras conversas do mesmo contato também saíram da área de trabalho."
+        : "Oportunidade arquivada com histórico preservado.",
+      "success"
+    );
     await loadWorkspace({ background: true });
   } catch (error) {
     showToast(`Não foi possível arquivar: ${error.message}`, "error");
@@ -4256,6 +4279,7 @@ function cacheElements() {
     archiveDescription: byId("archive-description"),
     archiveReason: byId("archive-reason"),
     archiveNote: byId("archive-note"),
+    archiveScopeHint: byId("archive-scope-hint"),
     archiveConfirm: byId("archive-confirm"),
     redistributionModal: byId("redistribution-modal"),
     redistributionForm: byId("redistribution-form"),
@@ -4315,6 +4339,7 @@ function bindEvents() {
     element.addEventListener("click", closeHandoffModal);
   });
   elements.archiveForm?.addEventListener("submit", submitArchive);
+  elements.archiveReason?.addEventListener("change", updateArchiveScopeHint);
   document.querySelectorAll("[data-close-archive]").forEach((element) => {
     element.addEventListener("click", closeArchiveModal);
   });

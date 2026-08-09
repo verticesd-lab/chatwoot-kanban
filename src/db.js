@@ -390,6 +390,9 @@ function createDatabase() {
     CREATE INDEX IF NOT EXISTS idx_tutorials_org_active_order ON tutorial_videos(organization_id, active, display_order, created_at);
   `);
 
+  ensureColumn(db, "archived_opportunities", "archive_scope", "TEXT NOT NULL DEFAULT 'conversation'");
+  ensureColumn(db, "archived_opportunities", "contact_key", "TEXT");
+
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
   ensureColumn(db, "memberships", "chatwoot_agent_id", "INTEGER");
   ensureColumn(db, "memberships", "visibility_scope", "TEXT NOT NULL DEFAULT 'all'");
@@ -417,6 +420,7 @@ function createDatabase() {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?)").run(nowIso());
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (5, ?)").run(nowIso());
 
   return { db, databasePath };
 }
@@ -1207,7 +1211,15 @@ function getOperationalUserByAgentId(organizationId, agentId) {
   ) || null;
 }
 
-function archiveOpportunity({ organizationId, conversationId, actorUserId, reason, note = "" }) {
+function archiveOpportunity({
+  organizationId,
+  conversationId,
+  actorUserId,
+  reason,
+  note = "",
+  archiveScope = "conversation",
+  contactKey = "",
+}) {
   const parsedConversationId = Number(conversationId);
   if (!Number.isInteger(parsedConversationId) || parsedConversationId <= 0) {
     const error = new Error("Conversa inválida");
@@ -1220,6 +1232,18 @@ function archiveOpportunity({ organizationId, conversationId, actorUserId, reaso
     error.status = 400;
     throw error;
   }
+  const cleanScope = String(archiveScope || "conversation").trim().toLowerCase() === "contact"
+    ? "contact"
+    : "conversation";
+  const cleanContactKey = cleanScope === "contact"
+    ? String(contactKey || "").trim().slice(0, 255)
+    : null;
+  if (cleanScope === "contact" && !cleanContactKey) {
+    const error = new Error("Não foi possível identificar o contato para arquivamento completo");
+    error.status = 400;
+    throw error;
+  }
+
   const now = nowIso();
   const existing = db.prepare(`
     SELECT * FROM archived_opportunities
@@ -1228,8 +1252,9 @@ function archiveOpportunity({ organizationId, conversationId, actorUserId, reaso
   db.prepare(`
     INSERT INTO archived_opportunities
     (id, organization_id, conversation_id, reason, note, archived_by_user_id,
-     archived_at, restored_by_user_id, restored_at, active, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?)
+     archived_at, restored_by_user_id, restored_at, active, updated_at,
+     archive_scope, contact_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, ?, ?, ?)
     ON CONFLICT(organization_id, conversation_id) DO UPDATE SET
       reason = excluded.reason,
       note = excluded.note,
@@ -1238,7 +1263,9 @@ function archiveOpportunity({ organizationId, conversationId, actorUserId, reaso
       restored_by_user_id = NULL,
       restored_at = NULL,
       active = 1,
-      updated_at = excluded.updated_at
+      updated_at = excluded.updated_at,
+      archive_scope = excluded.archive_scope,
+      contact_key = excluded.contact_key
   `).run(
     existing?.id || crypto.randomUUID(),
     organizationId,
@@ -1247,16 +1274,24 @@ function archiveOpportunity({ organizationId, conversationId, actorUserId, reaso
     String(note || "").trim().slice(0, 500) || null,
     actorUserId || null,
     now,
-    now
+    now,
+    cleanScope,
+    cleanContactKey
   );
   logAudit({
     organizationId,
     actorUserId,
     action: "opportunity.archived",
-    entityType: "conversation",
-    entityId: parsedConversationId,
+    entityType: cleanScope === "contact" ? "contact" : "conversation",
+    entityId: cleanScope === "contact" ? cleanContactKey : parsedConversationId,
     before: existing && existing.active ? { archived: true, reason: existing.reason } : { archived: false },
-    after: { archived: true, reason: cleanReason, note: String(note || "").trim() || null },
+    after: {
+      archived: true,
+      reason: cleanReason,
+      note: String(note || "").trim() || null,
+      scope: cleanScope,
+      contactKey: cleanContactKey,
+    },
   });
   return getArchivedOpportunity(organizationId, parsedConversationId);
 }
@@ -1303,6 +1338,8 @@ function getArchivedOpportunity(organizationId, conversationId) {
     archivedByUserId: row.archived_by_user_id || null,
     archivedByName: row.archived_by_name || "Sistema",
     archivedAt: row.archived_at,
+    archiveScope: row.archive_scope || "conversation",
+    contactKey: row.contact_key || "",
     active: Boolean(row.active),
   };
 }
@@ -1322,6 +1359,8 @@ function listArchivedOpportunities(organizationId) {
     archivedByUserId: row.archived_by_user_id || null,
     archivedByName: row.archived_by_name || "Sistema",
     archivedAt: row.archived_at,
+    archiveScope: row.archive_scope || "conversation",
+    contactKey: row.contact_key || "",
     active: Boolean(row.active),
   }));
 }

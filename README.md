@@ -81,3 +81,8 @@ tests/
 **Kanban CRM:** usuários, permissões, pipeline, etapas, filtros, auditoria e gestão comercial.
 
 Os atributos comerciais continuam sendo gravados nas conversas do Chatwoot para manter compatibilidade com a V1.2 e preservar os dados já validados.
+
+
+## CRM V1.3.5
+
+Arquivamento de leads por contato para impedir que conversas antigas ou paralelas de leads de teste/sem valor operacional retornem ao Pipeline. Consulte `CRM_V1.3.5_README.md`.

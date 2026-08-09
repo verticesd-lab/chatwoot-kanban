@@ -7,6 +7,7 @@ const html = fs.readFileSync(path.join(root, "src", "index.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "src", "script.js"), "utf8");
 const server = fs.readFileSync(path.join(root, "src", "server.js"), "utf8");
 const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
+const suppression = fs.readFileSync(path.join(root, "src", "contact-suppression.js"), "utf8");
 
 const htmlIds = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
 const duplicateIds = htmlIds.filter((id, index) => htmlIds.indexOf(id) !== index);
@@ -42,6 +43,7 @@ for (const id of [
   "view-tutorials",
   "tutorial-video-grid",
   "tutorial-player-modal",
+  "archive-scope-hint",
 ]) {
   assert(htmlIds.includes(id), `Elemento da V1.3.3 ausente: ${id}`);
 }
@@ -57,5 +59,12 @@ assert(html.includes('referrerpolicy="strict-origin-when-cross-origin"'));
 assert(script.includes("function renderTutorials()"));
 assert(styles.includes("flex-direction: column"));
 assert(styles.includes("border-left: 3px solid #94a3b8"));
+assert(server.includes('require("./contact-suppression")'));
+assert(server.includes("archivedContactKeys"));
+assert(script.includes("function archiveScopeForReason(reason)"));
+assert(script.includes('body: JSON.stringify({ reason, note, scope })'));
+assert(html.includes('id="archive-scope-hint"'));
+assert(suppression.includes('"lead de teste"'));
+assert(suppression.includes('"sem valor operacional"'));
 
-console.log("CRM V1.3.4 static UI/API contract tests: OK");
+console.log("CRM V1.3.5 static UI/API contract tests: OK");

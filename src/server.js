@@ -6,6 +6,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 const db = require("./db");
 const access = require("./access-control");
+const suppression = require("./contact-suppression");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -693,9 +694,15 @@ app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => 
     const archivedByConversation = new Map(
       archivedItems.map((item) => [Number(item.conversationId), item])
     );
-    const activeConversations = scopedConversations.filter(
-      (conversation) => !archivedByConversation.has(Number(conversation.id))
+    const archivedContactKeys = suppression.archivedContactKeys(
+      allConversations,
+      archivedItems
     );
+    const activeConversations = scopedConversations.filter((conversation) => {
+      if (archivedByConversation.has(Number(conversation.id))) return false;
+      const contactKey = suppression.contactIdentity(conversation);
+      return !contactKey || !archivedContactKeys.has(contactKey);
+    });
     const canViewArchive = hasPermission(req.crmSession, "archive:manage");
     const archivedConversations = canViewArchive
       ? scopedConversations
@@ -1126,12 +1133,19 @@ app.post(
     try {
       const conversation = await requireConversationAccess(req, res, conversationId);
       if (!conversation) return;
+      const requestedScope = String(req.body?.scope || "conversation").trim().toLowerCase();
+      const archiveScope = requestedScope === "contact" ? "contact" : "conversation";
+      const contactKey = archiveScope === "contact"
+        ? suppression.contactIdentity(conversation)
+        : "";
       const archived = db.archiveOpportunity({
         organizationId: req.crmSession.organization_id,
         conversationId,
         actorUserId: req.crmSession.user_id,
         reason,
         note,
+        archiveScope,
+        contactKey,
       });
       return res.json({ archived });
     } catch (error) {
@@ -1535,6 +1549,6 @@ app.use((error, _req, res, _next) => {
 setInterval(db.cleanupSessions, 15 * 60 * 1000).unref();
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`CRM central V1.3.3 rodando na porta ${PORT}`);
+  console.log(`CRM central V1.3.5 rodando na porta ${PORT}`);
   console.log(`Banco central: ${db.databasePath}`);
 });
