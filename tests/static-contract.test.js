@@ -28,6 +28,10 @@ for (const endpoint of [
   "/api/crm/opportunities/:conversationId/restore",
   "/api/crm/tutorials",
   "/api/crm/tutorials/:id",
+  "/api/crm/reactivations/candidates",
+  "/api/crm/reactivations/campaigns",
+  "/api/crm/reactivations/campaigns/:id/recipients",
+  "/api/crm/reactivations/campaigns/:id/cancel",
 ]) {
   assert(server.includes(endpoint), `Endpoint ausente: ${endpoint}`);
 }
@@ -44,6 +48,11 @@ for (const id of [
   "tutorial-video-grid",
   "tutorial-player-modal",
   "archive-scope-hint",
+  "view-reactivations",
+  "reactivation-nav-item",
+  "reactivation-candidates-table",
+  "reactivation-preview-modal",
+  "reactivation-manual-modal",
 ]) {
   assert(htmlIds.includes(id), `Elemento da V1.3.3 ausente: ${id}`);
 }
@@ -53,6 +62,10 @@ assert(script.includes("state.historyLimit += PIPELINE_COLUMN_PAGE_SIZE"));
 assert(script.includes("state.archiveLimit += PIPELINE_COLUMN_PAGE_SIZE"));
 assert(styles.includes("CRM V1.3.3 — controle operacional"));
 assert(styles.includes("CRM V1.3.4 — central de tutoriais"));
+assert(styles.includes("CRM V1.3.6 — central de reativação manual"));
+assert(script.includes("function renderReactivationCenter()"));
+assert(server.includes('require("./reactivation")'));
+assert(server.includes("REACTIVATION_SEND_ENABLED"));
 assert(server.includes("https://www.youtube-nocookie.com"));
 assert(server.includes('Referrer-Policy", "strict-origin-when-cross-origin'));
 assert(html.includes('referrerpolicy="strict-origin-when-cross-origin"'));
@@ -67,4 +80,4 @@ assert(html.includes('id="archive-scope-hint"'));
 assert(suppression.includes('"lead de teste"'));
 assert(suppression.includes('"sem valor operacional"'));
 
-console.log("CRM V1.3.5 static UI/API contract tests: OK");
+console.log("CRM V1.3.6 static UI/API contract tests: OK");

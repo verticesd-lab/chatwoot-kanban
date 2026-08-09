@@ -28,6 +28,7 @@ const ROLE_PERMISSIONS = {
     "transfer_requests:manage",
     "presence:read",
     "tutorials:manage",
+    "reactivations:manage",
   ],
   manager: [
     "crm:read",
@@ -42,6 +43,7 @@ const ROLE_PERMISSIONS = {
     "transfer_requests:manage",
     "presence:read",
     "tutorials:manage",
+    "reactivations:manage",
   ],
   agent: ["crm:read", "opportunities:write", "messages:send", "presence:read"],
   viewer: ["crm:read", "presence:read"],
@@ -59,7 +61,7 @@ const OPERATIONAL_PROFILES = {
 const OPERATIONAL_PERMISSIONS = {
   admin: ["assignments:manage", "interventions:manage"],
   manager: ["assignments:manage", "interventions:manage"],
-  sdr: ["interventions:manage"],
+  sdr: ["interventions:manage", "reactivations:manage"],
   seller: ["interventions:manage"],
   agent: ["assignments:manage", "interventions:manage"],
   viewer: [],
@@ -378,6 +380,49 @@ function createDatabase() {
       FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
+    CREATE TABLE IF NOT EXISTS reactivation_campaigns (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      template_key TEXT NOT NULL,
+      message_template TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','completed','partial_failed','cancelled')),
+      created_by_user_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reactivation_recipients (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      organization_id TEXT NOT NULL,
+      conversation_id INTEGER NOT NULL,
+      contact_id INTEGER,
+      contact_name TEXT NOT NULL,
+      phone TEXT,
+      source_type TEXT NOT NULL DEFAULT 'tag' CHECK (source_type IN ('tag','manual')),
+      source_labels_json TEXT NOT NULL DEFAULT '[]',
+      message_rendered TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','processing','sent','failed','blocked','uncertain','cancelled')),
+      block_reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      external_message_id TEXT,
+      last_error TEXT,
+      queued_at TEXT NOT NULL,
+      processing_at TEXT,
+      sent_at TEXT,
+      failed_at TEXT,
+      replied_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (campaign_id, conversation_id),
+      FOREIGN KEY (campaign_id) REFERENCES reactivation_campaigns(id) ON DELETE CASCADE,
+      FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_stages_pipeline_position ON pipeline_stages(pipeline_id, position);
     CREATE INDEX IF NOT EXISTS idx_filters_org_owner ON filter_presets(organization_id, owner_user_id);
@@ -388,6 +433,10 @@ function createDatabase() {
     CREATE INDEX IF NOT EXISTS idx_archive_org_active ON archived_opportunities(organization_id, active, archived_at DESC);
     CREATE INDEX IF NOT EXISTS idx_transfer_org_status ON transfer_requests(organization_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tutorials_org_active_order ON tutorial_videos(organization_id, active, display_order, created_at);
+    CREATE INDEX IF NOT EXISTS idx_reactivation_campaigns_org_created ON reactivation_campaigns(organization_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_reactivation_recipients_queue ON reactivation_recipients(status, queued_at);
+    CREATE INDEX IF NOT EXISTS idx_reactivation_recipients_org_conversation ON reactivation_recipients(organization_id, conversation_id, status);
+    CREATE INDEX IF NOT EXISTS idx_reactivation_recipients_campaign_status ON reactivation_recipients(campaign_id, status);
   `);
 
   ensureColumn(db, "archived_opportunities", "archive_scope", "TEXT NOT NULL DEFAULT 'conversation'");
@@ -1697,6 +1746,413 @@ function deleteTutorialVideo({ organizationId, actorUserId, tutorialId }) {
   return true;
 }
 
+
+function reactivationRecipientRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    campaignId: row.campaign_id,
+    organizationId: row.organization_id,
+    conversationId: Number(row.conversation_id),
+    contactId: row.contact_id ? Number(row.contact_id) : null,
+    contactName: row.contact_name,
+    phone: row.phone || "",
+    sourceType: row.source_type,
+    sourceLabels: safeJsonParse(row.source_labels_json, []),
+    messageRendered: row.message_rendered,
+    status: row.status,
+    blockReason: row.block_reason || null,
+    attempts: Number(row.attempts || 0),
+    externalMessageId: row.external_message_id || null,
+    lastError: row.last_error || null,
+    queuedAt: row.queued_at,
+    processingAt: row.processing_at || null,
+    sentAt: row.sent_at || null,
+    failedAt: row.failed_at || null,
+    repliedAt: row.replied_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function refreshReactivationCampaignStatus(campaignId) {
+  const campaign = db.prepare("SELECT * FROM reactivation_campaigns WHERE id = ?").get(campaignId);
+  if (!campaign) return null;
+  if (campaign.status === "cancelled") return campaign.status;
+  const counts = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+      SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing,
+      SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+      SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END) AS uncertain,
+      SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled
+    FROM reactivation_recipients
+    WHERE campaign_id = ?
+  `).get(campaignId);
+  const queued = Number(counts.queued || 0);
+  const processing = Number(counts.processing || 0);
+  const failures = Number(counts.failed || 0) + Number(counts.uncertain || 0);
+  let status = "queued";
+  let completedAt = null;
+  if (processing > 0) status = "running";
+  else if (queued > 0) status = Number(counts.sent || 0) > 0 ? "running" : "queued";
+  else {
+    status = failures > 0 ? "partial_failed" : "completed";
+    completedAt = nowIso();
+  }
+  db.prepare(`
+    UPDATE reactivation_campaigns
+    SET status = ?, completed_at = COALESCE(?, completed_at), updated_at = ?
+    WHERE id = ?
+  `).run(status, completedAt, nowIso(), campaignId);
+  return status;
+}
+
+function createReactivationCampaign({
+  organizationId,
+  actorUserId,
+  name,
+  templateKey,
+  messageTemplate,
+  recipients,
+}) {
+  const campaignId = crypto.randomUUID();
+  const now = nowIso();
+  const normalizedRecipients = Array.isArray(recipients) ? recipients : [];
+  transaction(() => {
+    db.prepare(`
+      INSERT INTO reactivation_campaigns
+      (id, organization_id, name, template_key, message_template, status,
+       created_by_user_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+    `).run(
+      campaignId,
+      organizationId,
+      String(name || "Reativação manual").trim().slice(0, 120) || "Reativação manual",
+      String(templateKey || "custom").trim().slice(0, 60) || "custom",
+      String(messageTemplate || ""),
+      actorUserId || null,
+      now,
+      now
+    );
+    const insert = db.prepare(`
+      INSERT INTO reactivation_recipients
+      (id, campaign_id, organization_id, conversation_id, contact_id, contact_name, phone,
+       source_type, source_labels_json, message_rendered, status, block_reason,
+       attempts, queued_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+    `);
+    for (const recipient of normalizedRecipients) {
+      insert.run(
+        crypto.randomUUID(),
+        campaignId,
+        organizationId,
+        Number(recipient.conversationId),
+        recipient.contactId ? Number(recipient.contactId) : null,
+        String(recipient.contactName || `Contato #${recipient.conversationId}`).slice(0, 120),
+        String(recipient.phone || "").slice(0, 80) || null,
+        recipient.sourceType === "manual" ? "manual" : "tag",
+        JSON.stringify(Array.isArray(recipient.sourceLabels) ? recipient.sourceLabels : []),
+        String(recipient.messageRendered || ""),
+        ["queued", "blocked"].includes(recipient.status) ? recipient.status : "blocked",
+        recipient.blockReason ? String(recipient.blockReason).slice(0, 300) : null,
+        now,
+        now,
+        now
+      );
+    }
+  });
+  refreshReactivationCampaignStatus(campaignId);
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "reactivation.campaign.created",
+    entityType: "reactivation_campaign",
+    entityId: campaignId,
+    after: {
+      name: String(name || "Reativação manual").trim().slice(0, 120),
+      templateKey,
+      recipients: normalizedRecipients.length,
+      queued: normalizedRecipients.filter((item) => item.status === "queued").length,
+      blocked: normalizedRecipients.filter((item) => item.status === "blocked").length,
+    },
+  });
+  return getReactivationCampaign(organizationId, campaignId);
+}
+
+function getReactivationCampaign(organizationId, campaignId) {
+  const row = db.prepare(`
+    SELECT c.*, u.name AS creator_name
+    FROM reactivation_campaigns c
+    LEFT JOIN users u ON u.id = c.created_by_user_id
+    WHERE c.id = ? AND c.organization_id = ?
+  `).get(campaignId, organizationId);
+  if (!row) return null;
+  const counts = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
+      SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing,
+      SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+      SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END) AS uncertain,
+      SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+      SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) AS replied
+    FROM reactivation_recipients
+    WHERE campaign_id = ?
+  `).get(campaignId);
+  const sent = Number(counts.sent || 0);
+  const replied = Number(counts.replied || 0);
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    name: row.name,
+    templateKey: row.template_key,
+    messageTemplate: row.message_template,
+    status: row.status,
+    creatorName: row.creator_name || "Sistema",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at || null,
+    counts: {
+      total: Number(counts.total || 0),
+      queued: Number(counts.queued || 0),
+      processing: Number(counts.processing || 0),
+      sent,
+      failed: Number(counts.failed || 0),
+      blocked: Number(counts.blocked || 0),
+      uncertain: Number(counts.uncertain || 0),
+      cancelled: Number(counts.cancelled || 0),
+      replied,
+    },
+    responseRate: sent > 0 ? Number(((replied / sent) * 100).toFixed(1)) : 0,
+  };
+}
+
+function listReactivationCampaigns(organizationId, limit = 30) {
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30));
+  return db.prepare(`
+    SELECT id FROM reactivation_campaigns
+    WHERE organization_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(organizationId, safeLimit)
+    .map((row) => getReactivationCampaign(organizationId, row.id));
+}
+
+function listReactivationRecipients(organizationId, campaignId) {
+  return db.prepare(`
+    SELECT * FROM reactivation_recipients
+    WHERE organization_id = ? AND campaign_id = ?
+    ORDER BY created_at, conversation_id
+  `).all(organizationId, campaignId).map(reactivationRecipientRow);
+}
+
+function hasPriorSuccessfulReactivation(organizationId, conversationId) {
+  const row = db.prepare(`
+    SELECT id FROM reactivation_recipients
+    WHERE organization_id = ? AND conversation_id = ? AND status = 'sent'
+    LIMIT 1
+  `).get(organizationId, Number(conversationId));
+  return Boolean(row);
+}
+
+function getReactivationProtectionStatus(organizationId, conversationId, excludeRecipientId = null) {
+  const row = excludeRecipientId
+    ? db.prepare(`
+        SELECT status FROM reactivation_recipients
+        WHERE organization_id = ? AND conversation_id = ? AND id <> ?
+          AND status IN ('queued','processing','sent','uncertain')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `).get(organizationId, Number(conversationId), excludeRecipientId)
+    : db.prepare(`
+        SELECT status FROM reactivation_recipients
+        WHERE organization_id = ? AND conversation_id = ?
+          AND status IN ('queued','processing','sent','uncertain')
+        ORDER BY created_at DESC
+        LIMIT 1
+      `).get(organizationId, Number(conversationId));
+  return row?.status || null;
+}
+
+function claimNextReactivationRecipient() {
+  return transaction(() => {
+    const row = db.prepare(`
+      SELECT r.*
+      FROM reactivation_recipients r
+      JOIN reactivation_campaigns c ON c.id = r.campaign_id
+      WHERE r.status = 'queued' AND c.status IN ('queued','running')
+      ORDER BY r.queued_at, r.created_at
+      LIMIT 1
+    `).get();
+    if (!row) return null;
+    const now = nowIso();
+    const result = db.prepare(`
+      UPDATE reactivation_recipients
+      SET status = 'processing', processing_at = ?, attempts = attempts + 1, updated_at = ?
+      WHERE id = ? AND status = 'queued'
+    `).run(now, now, row.id);
+    if (!result.changes) return null;
+    db.prepare(`UPDATE reactivation_campaigns SET status = 'running', updated_at = ? WHERE id = ?`)
+      .run(now, row.campaign_id);
+    return reactivationRecipientRow(db.prepare("SELECT * FROM reactivation_recipients WHERE id = ?").get(row.id));
+  });
+}
+
+function markReactivationRecipientSent({ recipientId, externalMessageId = null }) {
+  const row = db.prepare("SELECT * FROM reactivation_recipients WHERE id = ?").get(recipientId);
+  if (!row) return null;
+  const now = nowIso();
+  db.prepare(`
+    UPDATE reactivation_recipients
+    SET status = 'sent', external_message_id = ?, sent_at = ?, last_error = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(externalMessageId ? String(externalMessageId).slice(0, 120) : null, now, now, recipientId);
+  refreshReactivationCampaignStatus(row.campaign_id);
+  return reactivationRecipientRow(db.prepare("SELECT * FROM reactivation_recipients WHERE id = ?").get(recipientId));
+}
+
+function markReactivationRecipientTerminal({ recipientId, status, reason = null }) {
+  if (!["failed", "blocked", "uncertain", "cancelled"].includes(status)) {
+    throw new Error("Status terminal de reativação inválido");
+  }
+  const row = db.prepare("SELECT * FROM reactivation_recipients WHERE id = ?").get(recipientId);
+  if (!row) return null;
+  const now = nowIso();
+  db.prepare(`
+    UPDATE reactivation_recipients
+    SET status = ?, block_reason = CASE WHEN ? = 'blocked' THEN ? ELSE block_reason END,
+        last_error = CASE WHEN ? IN ('failed','uncertain') THEN ? ELSE last_error END,
+        failed_at = CASE WHEN ? IN ('failed','uncertain') THEN ? ELSE failed_at END,
+        updated_at = ?
+    WHERE id = ?
+  `).run(status, status, reason, status, reason, status, now, now, recipientId);
+  refreshReactivationCampaignStatus(row.campaign_id);
+  return reactivationRecipientRow(db.prepare("SELECT * FROM reactivation_recipients WHERE id = ?").get(recipientId));
+}
+
+function markReactivationReply({ organizationId, conversationId, repliedAt }) {
+  const rows = db.prepare(`
+    SELECT id, campaign_id FROM reactivation_recipients
+    WHERE organization_id = ? AND conversation_id = ? AND status = 'sent' AND replied_at IS NULL
+  `).all(organizationId, Number(conversationId));
+  if (!rows.length) return 0;
+  const now = nowIso();
+  const update = db.prepare(`
+    UPDATE reactivation_recipients SET replied_at = ?, updated_at = ?
+    WHERE id = ? AND replied_at IS NULL
+  `);
+  let changed = 0;
+  for (const row of rows) {
+    const result = update.run(repliedAt || now, now, row.id);
+    changed += Number(result.changes || 0);
+    if (result.changes) refreshReactivationCampaignStatus(row.campaign_id);
+  }
+  return changed;
+}
+
+function listPendingReactivationReplyChecks(organizationId) {
+  return db.prepare(`
+    SELECT * FROM reactivation_recipients
+    WHERE organization_id = ? AND status = 'sent' AND sent_at IS NOT NULL AND replied_at IS NULL
+    ORDER BY sent_at DESC
+    LIMIT 1000
+  `).all(organizationId).map(reactivationRecipientRow);
+}
+
+function reactivationSummary(organizationId) {
+  const row = db.prepare(`
+    SELECT
+      COUNT(DISTINCT campaign_id) AS campaigns,
+      SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+      SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+      SUM(CASE WHEN status = 'uncertain' THEN 1 ELSE 0 END) AS uncertain,
+      SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) AS replied
+    FROM reactivation_recipients
+    WHERE organization_id = ?
+  `).get(organizationId);
+  const sent = Number(row.sent || 0);
+  const replied = Number(row.replied || 0);
+  return {
+    campaigns: Number(row.campaigns || 0),
+    sent,
+    blocked: Number(row.blocked || 0),
+    failed: Number(row.failed || 0),
+    uncertain: Number(row.uncertain || 0),
+    replied,
+    responseRate: sent > 0 ? Number(((replied / sent) * 100).toFixed(1)) : 0,
+  };
+}
+
+function cancelReactivationCampaign({ organizationId, campaignId, actorUserId }) {
+  const campaign = db.prepare(`
+    SELECT * FROM reactivation_campaigns WHERE id = ? AND organization_id = ?
+  `).get(campaignId, organizationId);
+  if (!campaign) return null;
+  if (["completed", "partial_failed", "cancelled"].includes(campaign.status)) {
+    return getReactivationCampaign(organizationId, campaignId);
+  }
+  const now = nowIso();
+  transaction(() => {
+    db.prepare(`
+      UPDATE reactivation_recipients
+      SET status = 'cancelled', updated_at = ?
+      WHERE campaign_id = ? AND status = 'queued'
+    `).run(now, campaignId);
+    db.prepare(`
+      UPDATE reactivation_campaigns
+      SET status = 'cancelled', completed_at = ?, updated_at = ?
+      WHERE id = ? AND organization_id = ?
+    `).run(now, now, campaignId, organizationId);
+  });
+  logAudit({
+    organizationId,
+    actorUserId,
+    action: "reactivation.campaign.cancelled",
+    entityType: "reactivation_campaign",
+    entityId: campaignId,
+    before: { status: campaign.status },
+    after: { status: "cancelled" },
+  });
+  return getReactivationCampaign(organizationId, campaignId);
+}
+
+function markStaleReactivationProcessingUncertain(maxAgeMs = 10 * 60 * 1000) {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const rows = db.prepare(`
+    SELECT id, campaign_id FROM reactivation_recipients
+    WHERE status = 'processing' AND processing_at IS NOT NULL AND processing_at < ?
+  `).all(cutoff);
+  for (const row of rows) {
+    markReactivationRecipientTerminal({
+      recipientId: row.id,
+      status: "uncertain",
+      reason: "Processamento interrompido sem confirmação; revisão manual obrigatória para evitar duplicidade.",
+    });
+  }
+  return rows.length;
+}
+
+function getOrganizationIntegration(organizationId) {
+  const row = db.prepare(`
+    SELECT id, name, chatwoot_base_url, chatwoot_account_id, chatwoot_token_encrypted
+    FROM organizations WHERE id = ?
+  `).get(organizationId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    chatwootBaseUrl: row.chatwoot_base_url,
+    chatwootAccountId: Number(row.chatwoot_account_id),
+    chatwootToken: decryptSecret(row.chatwoot_token_encrypted),
+  };
+}
+
 function closeDatabase() {
   db.close();
 }
@@ -1786,6 +2242,21 @@ module.exports = {
   createTutorialVideo,
   updateTutorialVideo,
   deleteTutorialVideo,
+  createReactivationCampaign,
+  getReactivationCampaign,
+  listReactivationCampaigns,
+  listReactivationRecipients,
+  hasPriorSuccessfulReactivation,
+  getReactivationProtectionStatus,
+  claimNextReactivationRecipient,
+  markReactivationRecipientSent,
+  markReactivationRecipientTerminal,
+  markReactivationReply,
+  listPendingReactivationReplyChecks,
+  reactivationSummary,
+  cancelReactivationCampaign,
+  markStaleReactivationProcessingUncertain,
+  getOrganizationIntegration,
   logAudit,
   listAudit,
   closeDatabase,

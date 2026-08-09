@@ -7,6 +7,7 @@ dotenv.config();
 const db = require("./db");
 const access = require("./access-control");
 const suppression = require("./contact-suppression");
+const reactivation = require("./reactivation");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -14,6 +15,8 @@ const SESSION_TTL_MS = Number(process.env.CRM_SESSION_TTL_HOURS || 12) * 60 * 60
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
 const loginAttempts = new Map();
+const REACTIVATION_CONFIG = reactivation.reactivationConfig(process.env);
+let reactivationWorkerBusy = false;
 
 function normalizeBaseUrl(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
@@ -184,6 +187,208 @@ async function fetchAllChatwootConversations(session) {
     if (payload.length < 25) break;
   }
   return conversations;
+}
+
+
+async function fetchScopedActiveConversations(session) {
+  const allConversations = await fetchAllChatwootConversations(session);
+  const scopedConversations = access.filterConversationsForSession(session, allConversations);
+  const archivedItems = db.listArchivedOpportunities(session.organization_id);
+  const archivedByConversation = new Map(
+    archivedItems.map((item) => [Number(item.conversationId), item])
+  );
+  const archivedContactKeys = suppression.archivedContactKeys(allConversations, archivedItems);
+  return scopedConversations.filter((conversation) => {
+    if (archivedByConversation.has(Number(conversation.id))) return false;
+    const contactKey = suppression.contactIdentity(conversation);
+    return !contactKey || !archivedContactKeys.has(contactKey);
+  });
+}
+
+function reactivationProtectionReason(session, conversation, options = {}) {
+  if (!conversation) return "Conversa não encontrada no escopo atual";
+  if (reactivation.terminalStage(conversation)) return "Oportunidade já encerrada no CRM";
+  if (reactivation.hasBlockLabel(conversation, REACTIVATION_CONFIG.blockLabel)) {
+    return `Etiqueta de proteção “${REACTIVATION_CONFIG.blockLabel}” já aplicada`;
+  }
+  const protectionStatus = db.getReactivationProtectionStatus(
+    session.organization_id,
+    Number(conversation.id),
+    options.excludeRecipientId || null
+  );
+  if (protectionStatus === "sent") return "Reativação única já enviada anteriormente";
+  if (["queued", "processing"].includes(protectionStatus)) return "Lead já está em uma campanha de reativação em andamento";
+  if (protectionStatus === "uncertain") return "Envio anterior ficou sem confirmação; exige revisão manual para evitar duplicidade";
+  if (options.requireEligible) {
+    const matched = reactivation.matchingEligibilityLabels(conversation, REACTIVATION_CONFIG.eligibleLabels);
+    if (!matched.length) return "Lead não possui uma das etiquetas elegíveis";
+  }
+  return null;
+}
+
+function reactivationSessionFromIntegration(integration) {
+  return {
+    organization_id: integration.id,
+    chatwoot_base_url: integration.chatwootBaseUrl,
+    chatwoot_account_id: integration.chatwootAccountId,
+    chatwootToken: integration.chatwootToken,
+  };
+}
+
+async function processNextReactivationRecipient() {
+  if (!REACTIVATION_CONFIG.sendEnabled || reactivationWorkerBusy) return;
+  reactivationWorkerBusy = true;
+  let recipient = null;
+  try {
+    recipient = db.claimNextReactivationRecipient();
+    if (!recipient) return;
+    const integration = db.getOrganizationIntegration(recipient.organizationId);
+    if (!integration) {
+      db.markReactivationRecipientTerminal({
+        recipientId: recipient.id,
+        status: "failed",
+        reason: "Organização não encontrada para envio",
+      });
+      return;
+    }
+    const workerSession = reactivationSessionFromIntegration(integration);
+    const fetched = await fetchConversation(workerSession, recipient.conversationId);
+    if (!fetched.conversation) {
+      db.markReactivationRecipientTerminal({
+        recipientId: recipient.id,
+        status: "failed",
+        reason: `Conversa indisponível no Chatwoot (HTTP ${fetched.response?.status || "?"})`,
+      });
+      return;
+    }
+    const protection = reactivationProtectionReason(workerSession, fetched.conversation, {
+      requireEligible: false,
+      excludeRecipientId: recipient.id,
+    });
+    if (protection) {
+      db.markReactivationRecipientTerminal({ recipientId: recipient.id, status: "blocked", reason: protection });
+      db.logAudit({
+        organizationId: recipient.organizationId,
+        action: "reactivation.recipient.blocked",
+        entityType: "conversation",
+        entityId: recipient.conversationId,
+        metadata: { campaignId: recipient.campaignId, reason: protection },
+      });
+      return;
+    }
+
+    let sendResponse;
+    try {
+      sendResponse = await chatwootRequest(workerSession, {
+        method: "POST",
+        url: `${workerSession.chatwoot_base_url}/api/v1/accounts/${workerSession.chatwoot_account_id}/conversations/${recipient.conversationId}/messages`,
+        data: {
+          content: recipient.messageRendered,
+          message_type: "outgoing",
+          private: false,
+          content_type: "text",
+          content_attributes: {},
+        },
+      });
+    } catch (error) {
+      db.markReactivationRecipientTerminal({
+        recipientId: recipient.id,
+        status: "uncertain",
+        reason: `Falha de transporte sem confirmação: ${String(error.message || "erro de rede").slice(0, 220)}`,
+      });
+      return;
+    }
+
+    if (sendResponse.status < 200 || sendResponse.status >= 300) {
+      const ambiguous = sendResponse.status >= 500;
+      db.markReactivationRecipientTerminal({
+        recipientId: recipient.id,
+        status: ambiguous ? "uncertain" : "failed",
+        reason: ambiguous
+          ? `Chatwoot retornou HTTP ${sendResponse.status}; resultado tratado como incerto para impedir reenvio automático`
+          : `Chatwoot recusou o envio (HTTP ${sendResponse.status})`,
+      });
+      return;
+    }
+
+    const externalMessageId = sendResponse.data?.id || sendResponse.data?.data?.id || null;
+    const sent = db.markReactivationRecipientSent({ recipientId: recipient.id, externalMessageId });
+    db.logAudit({
+      organizationId: recipient.organizationId,
+      action: "reactivation.message.sent",
+      entityType: "conversation",
+      entityId: recipient.conversationId,
+      metadata: {
+        campaignId: recipient.campaignId,
+        recipientId: recipient.id,
+        externalMessageId: externalMessageId || undefined,
+      },
+    });
+
+    try {
+      const currentLabels = await readConversationLabels(workerSession, recipient.conversationId);
+      const blockLabel = REACTIVATION_CONFIG.blockLabel;
+      const nextLabels = [...currentLabels];
+      if (!nextLabels.some((label) => reactivation.normalizeLabel(label) === blockLabel)) {
+        nextLabels.push(blockLabel);
+      }
+      await writeConversationLabels(workerSession, recipient.conversationId, nextLabels);
+    } catch (error) {
+      db.logAudit({
+        organizationId: recipient.organizationId,
+        action: "reactivation.block_label.failed",
+        entityType: "conversation",
+        entityId: recipient.conversationId,
+        metadata: {
+          campaignId: recipient.campaignId,
+          recipientId: recipient.id,
+          sentAt: sent?.sentAt || null,
+          error: String(error.message || "Falha ao aplicar etiqueta").slice(0, 240),
+        },
+      });
+    }
+  } catch (error) {
+    console.error("Erro no worker de reativação:", error.message);
+    if (recipient?.id) {
+      db.markReactivationRecipientTerminal({
+        recipientId: recipient.id,
+        status: "uncertain",
+        reason: `Erro inesperado durante processamento: ${String(error.message || "erro").slice(0, 220)}`,
+      });
+    }
+  } finally {
+    reactivationWorkerBusy = false;
+  }
+}
+
+async function syncReactivationReplies(session, conversations = null) {
+  const pending = db.listPendingReactivationReplyChecks(session.organization_id);
+  if (!pending.length) return 0;
+  const source = conversations || await fetchAllChatwootConversations(session);
+  const byId = new Map(source.map((conversation) => [Number(conversation.id), conversation]));
+  let updated = 0;
+  for (const recipient of pending) {
+    const conversation = byId.get(Number(recipient.conversationId));
+    if (!conversation) continue;
+    const repliedAt = reactivation.latestIncomingAfter(conversation, recipient.sentAt);
+    if (!repliedAt) continue;
+    const changed = db.markReactivationReply({
+      organizationId: session.organization_id,
+      conversationId: recipient.conversationId,
+      repliedAt,
+    });
+    if (changed) {
+      updated += changed;
+      db.logAudit({
+        organizationId: session.organization_id,
+        action: "reactivation.customer.replied",
+        entityType: "conversation",
+        entityId: recipient.conversationId,
+        metadata: { repliedAt },
+      });
+    }
+  }
+  return updated;
 }
 
 async function readConversationLabels(session, conversationId) {
@@ -378,7 +583,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.3.3-operational-control",
+    version: "1.3.6-reactivation-center",
     database: "sqlite-central",
   });
 });
@@ -678,6 +883,226 @@ app.delete(
     });
     if (!deleted) return res.status(404).json({ error: "Tutorial não encontrado" });
     return res.status(204).send();
+  }
+);
+
+
+app.get(
+  "/api/crm/reactivations/candidates",
+  requireSession,
+  requirePermission("reactivations:manage"),
+  async (req, res) => {
+    try {
+      const requestedLabels = String(req.query.labels || "")
+        .split(",")
+        .map(reactivation.normalizeLabel)
+        .filter((label) => REACTIVATION_CONFIG.eligibleLabels.includes(label));
+      const selectedLabels = requestedLabels.length
+        ? [...new Set(requestedLabels)]
+        : [...REACTIVATION_CONFIG.eligibleLabels];
+      const period = ["today", "3d", "7d", "14d", "30d", "all"].includes(String(req.query.period || ""))
+        ? String(req.query.period)
+        : "7d";
+      const search = String(req.query.search || "").trim().toLocaleLowerCase("pt-BR").slice(0, 120);
+      const conversations = await fetchScopedActiveConversations(req.crmSession);
+      const matched = [];
+      for (const conversation of conversations) {
+        if (!reactivation.matchesPeriod(conversation, period)) continue;
+        const snapshot = reactivation.candidateSnapshot(conversation, REACTIVATION_CONFIG, { selectedLabels });
+        if (!snapshot.matchedLabels.length) continue;
+        if (search) {
+          const haystack = [
+            snapshot.contactName,
+            snapshot.phone,
+            snapshot.email,
+            String(snapshot.conversationId),
+          ].join(" ").toLocaleLowerCase("pt-BR");
+          if (!haystack.includes(search)) continue;
+        }
+        const blockReason = reactivationProtectionReason(req.crmSession, conversation, { requireEligible: true });
+        matched.push({
+          ...snapshot,
+          eligible: !blockReason,
+          blockReason,
+        });
+      }
+      matched.sort((a, b) => String(b.lastActivityAt || "").localeCompare(String(a.lastActivityAt || "")));
+      const eligible = matched.filter((item) => item.eligible);
+      return res.json({
+        configuration: {
+          sendEnabled: REACTIVATION_CONFIG.sendEnabled,
+          eligibleLabels: REACTIVATION_CONFIG.eligibleLabels,
+          blockLabel: REACTIVATION_CONFIG.blockLabel,
+          maxRecipients: REACTIVATION_CONFIG.maxRecipients,
+          workerIntervalMs: REACTIVATION_CONFIG.intervalMs,
+          templates: REACTIVATION_CONFIG.templates,
+          organizationName: req.crmSession.organization_name,
+        },
+        period,
+        selectedLabels,
+        matchedCount: matched.length,
+        eligibleCount: eligible.length,
+        blockedCount: matched.length - eligible.length,
+        candidates: matched,
+      });
+    } catch (error) {
+      console.error("Erro ao carregar candidatos à reativação:", error.message);
+      return res.status(error.status || 502).json({
+        error: error.message || "Falha ao carregar candidatos à reativação",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/crm/reactivations/campaigns",
+  requireSession,
+  requirePermission("reactivations:manage"),
+  async (req, res) => {
+    try {
+      if (String(req.query.sync || "1") !== "0") {
+        await syncReactivationReplies(req.crmSession);
+      }
+      return res.json({
+        summary: db.reactivationSummary(req.crmSession.organization_id),
+        campaigns: db.listReactivationCampaigns(
+          req.crmSession.organization_id,
+          Number(req.query.limit || 30)
+        ),
+      });
+    } catch (error) {
+      console.error("Erro ao carregar histórico de reativação:", error.message);
+      return res.status(error.status || 502).json({
+        error: error.message || "Falha ao carregar histórico de reativação",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/crm/reactivations/campaigns/:id/recipients",
+  requireSession,
+  requirePermission("reactivations:manage"),
+  (req, res) => {
+    const campaign = db.getReactivationCampaign(req.crmSession.organization_id, req.params.id);
+    if (!campaign) return res.status(404).json({ error: "Campanha de reativação não encontrada" });
+    return res.json({
+      campaign,
+      recipients: db.listReactivationRecipients(req.crmSession.organization_id, req.params.id),
+    });
+  }
+);
+
+app.post(
+  "/api/crm/reactivations/campaigns",
+  requireSession,
+  requirePermission("reactivations:manage"),
+  async (req, res) => {
+    if (!hasPermission(req.crmSession, "messages:send")) {
+      return res.status(403).json({ error: "Seu perfil não possui permissão para enviar mensagens" });
+    }
+    if (!REACTIVATION_CONFIG.sendEnabled) {
+      return res.status(409).json({
+        error: "O envio de reativação está desativado. Ative REACTIVATION_SEND_ENABLED após validar a implantação.",
+      });
+    }
+    try {
+      const messageTemplate = reactivation.validateMessageTemplate(req.body?.messageTemplate);
+      const templateKey = String(req.body?.templateKey || "custom").trim().slice(0, 60) || "custom";
+      const name = String(req.body?.name || "Reativação manual").trim().slice(0, 120) || "Reativação manual";
+      const rawRecipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+      const unique = new Map();
+      for (const raw of rawRecipients) {
+        const conversationId = Number(raw?.conversationId);
+        if (!Number.isInteger(conversationId) || conversationId <= 0) continue;
+        if (!unique.has(conversationId)) {
+          unique.set(conversationId, {
+            conversationId,
+            sourceType: raw?.sourceType === "manual" ? "manual" : "tag",
+          });
+        }
+      }
+      const selections = [...unique.values()];
+      if (!selections.length) return res.status(400).json({ error: "Selecione pelo menos um lead" });
+      if (selections.length > REACTIVATION_CONFIG.maxRecipients) {
+        return res.status(400).json({
+          error: `Selecione no máximo ${REACTIVATION_CONFIG.maxRecipients} leads por campanha`,
+        });
+      }
+
+      const conversations = await fetchScopedActiveConversations(req.crmSession);
+      const byId = new Map(conversations.map((conversation) => [Number(conversation.id), conversation]));
+      const recipients = [];
+      for (const selection of selections) {
+        const conversation = byId.get(selection.conversationId);
+        if (!conversation) {
+          recipients.push({
+            conversationId: selection.conversationId,
+            contactName: `Conversa #${selection.conversationId}`,
+            phone: "",
+            sourceType: selection.sourceType,
+            sourceLabels: [],
+            messageRendered: messageTemplate.replace(/{{\s*primeiro_nome\s*}}/g, "tudo bem"),
+            status: "blocked",
+            blockReason: "Conversa não encontrada no escopo operacional atual",
+          });
+          continue;
+        }
+        const snapshot = reactivation.candidateSnapshot(conversation, REACTIVATION_CONFIG);
+        let blockReason = reactivationProtectionReason(req.crmSession, conversation, {
+          requireEligible: selection.sourceType !== "manual",
+        });
+        if (!blockReason && selection.sourceType !== "manual" && !snapshot.matchedLabels.length) {
+          blockReason = "Lead não possui uma das etiquetas elegíveis";
+        }
+        recipients.push({
+          conversationId: snapshot.conversationId,
+          contactId: snapshot.contactId,
+          contactName: snapshot.contactName,
+          phone: snapshot.phone,
+          sourceType: selection.sourceType,
+          sourceLabels: snapshot.matchedLabels,
+          messageRendered: reactivation.renderMessage(messageTemplate, conversation),
+          status: blockReason ? "blocked" : "queued",
+          blockReason,
+        });
+      }
+
+      const campaign = db.createReactivationCampaign({
+        organizationId: req.crmSession.organization_id,
+        actorUserId: req.crmSession.user_id,
+        name,
+        templateKey,
+        messageTemplate,
+        recipients,
+      });
+      return res.status(201).json({
+        campaign,
+        queued: recipients.filter((item) => item.status === "queued").length,
+        blocked: recipients
+          .filter((item) => item.status === "blocked")
+          .map((item) => ({ conversationId: item.conversationId, reason: item.blockReason })),
+      });
+    } catch (error) {
+      return res.status(error.status || 500).json({
+        error: error.message || "Falha ao criar campanha de reativação",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/crm/reactivations/campaigns/:id/cancel",
+  requireSession,
+  requirePermission("reactivations:manage"),
+  (req, res) => {
+    const campaign = db.cancelReactivationCampaign({
+      organizationId: req.crmSession.organization_id,
+      campaignId: req.params.id,
+      actorUserId: req.crmSession.user_id,
+    });
+    if (!campaign) return res.status(404).json({ error: "Campanha de reativação não encontrada" });
+    return res.json({ campaign });
   }
 );
 
@@ -1548,7 +1973,18 @@ app.use((error, _req, res, _next) => {
 
 setInterval(db.cleanupSessions, 15 * 60 * 1000).unref();
 
+const staleReactivationCount = db.markStaleReactivationProcessingUncertain(0);
+if (staleReactivationCount > 0) {
+  console.warn(`${staleReactivationCount} envio(s) de reativação ficaram como incertos após reinício; revisão manual necessária.`);
+}
+if (REACTIVATION_CONFIG.sendEnabled) {
+  setInterval(processNextReactivationRecipient, REACTIVATION_CONFIG.intervalMs).unref();
+  console.log(`Worker de reativação manual ativo: 1 envio por ciclo de ${REACTIVATION_CONFIG.intervalMs}ms.`);
+} else {
+  console.log("Reativação manual disponível para revisão; envio desativado por REACTIVATION_SEND_ENABLED=false.");
+}
+
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`CRM central V1.3.5 rodando na porta ${PORT}`);
+  console.log(`CRM central V1.3.6 rodando na porta ${PORT}`);
   console.log(`Banco central: ${db.databasePath}`);
 });

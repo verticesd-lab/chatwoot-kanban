@@ -82,6 +82,16 @@ const state = {
   tutorialCategory: "all",
   tutorialTab: "watch",
   tutorialLoading: false,
+  reactivation: {
+    configuration: null,
+    candidates: [],
+    campaigns: [],
+    summary: { campaigns: 0, sent: 0, replied: 0, blocked: 0, failed: 0, uncertain: 0, responseRate: 0 },
+    selected: new Map(),
+    period: "7d",
+    search: "",
+    loading: false,
+  },
 };
 
 const elements = {};
@@ -687,6 +697,7 @@ function renderIdentity() {
   if (elements.saveLabels) elements.saveLabels.disabled = !hasPermission("opportunities:write");
   elements.replySubmit.disabled = !hasPermission("messages:send");
   updateArchiveNavigation();
+  updateReactivationNavigation();
   renderPresence();
 }
 
@@ -4003,6 +4014,550 @@ async function saveTutorial(event) {
   }
 }
 
+
+const REACTIVATION_LABEL_TITLES = {
+  "aguardando-cpf-de-terceiros": "Aguardando CPF de terceiros",
+  "fora-do-horario": "Fora do horário",
+  "aguardando-retorno-do-cliente": "Aguardando retorno do cliente",
+};
+
+function normalizeReactivationLabel(value) {
+  return safeLower(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_\s]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function reactivationLabelTitle(label) {
+  const normalized = normalizeReactivationLabel(label);
+  return REACTIVATION_LABEL_TITLES[normalized] || String(label || normalized).replace(/-/g, " ");
+}
+
+function selectedReactivationLabels() {
+  return [...document.querySelectorAll("[data-reactivation-label]:checked")]
+    .map((input) => normalizeReactivationLabel(input.value))
+    .filter(Boolean);
+}
+
+function clientHasReactivationBlock(conversation) {
+  const blockLabel = state.reactivation.configuration?.blockLabel || "reativacao-unica-enviada";
+  return getLabels(conversation).some(
+    (label) => normalizeReactivationLabel(label) === normalizeReactivationLabel(blockLabel)
+  );
+}
+
+function clientReactivationTerminal(conversation) {
+  return ["won", "lost"].includes(getConversationStage(conversation));
+}
+
+function updateReactivationNavigation() {
+  const allowed = hasPermission("reactivations:manage");
+  elements.reactivationNavItem?.classList.toggle("is-hidden", !allowed);
+  if (!allowed || !elements.reactivationNavCount) return;
+
+  let count = Number(state.reactivation?.serverEligibleCount);
+  if (!Number.isFinite(count)) {
+    const eligibleLabels = new Set(
+      state.reactivation.configuration?.eligibleLabels || Object.keys(REACTIVATION_LABEL_TITLES)
+    );
+    count = state.conversations.filter((conversation) => {
+      if (clientReactivationTerminal(conversation) || clientHasReactivationBlock(conversation)) return false;
+      return getLabels(conversation).some((label) => eligibleLabels.has(normalizeReactivationLabel(label)));
+    }).length;
+  }
+  elements.reactivationNavCount.textContent = String(count);
+  elements.reactivationNavCount.classList.toggle("is-hidden", count <= 0);
+}
+
+function defaultReactivationCampaignName() {
+  const now = new Date();
+  return `Reativação ${new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(now)}`;
+}
+
+function populateReactivationTemplates() {
+  if (!elements.reactivationTemplate) return;
+  const templates = state.reactivation.configuration?.templates || [];
+  const current = elements.reactivationTemplate.value;
+  elements.reactivationTemplate.replaceChildren();
+  for (const template of templates) {
+    const option = document.createElement("option");
+    option.value = template.key;
+    option.textContent = template.label;
+    option.dataset.message = template.message;
+    elements.reactivationTemplate.appendChild(option);
+  }
+  if (templates.length) {
+    elements.reactivationTemplate.value = templates.some((item) => item.key === current)
+      ? current
+      : templates[0].key;
+    if (!elements.reactivationMessage.value.trim()) {
+      elements.reactivationMessage.value = templates.find(
+        (item) => item.key === elements.reactivationTemplate.value
+      )?.message || "";
+    }
+  }
+}
+
+function reactivationSelectionEntries() {
+  return [...state.reactivation.selected.entries()].map(([conversationId, value]) => ({
+    conversationId: Number(conversationId),
+    sourceType: value?.sourceType === "manual" ? "manual" : "tag",
+  }));
+}
+
+function updateReactivationSelectionSummary() {
+  const count = state.reactivation.selected.size;
+  if (elements.reactivationSelectionSummary) {
+    elements.reactivationSelectionSummary.textContent = `${count} selecionado${count === 1 ? "" : "s"}`;
+  }
+  if (elements.reactivationComposeCount) elements.reactivationComposeCount.textContent = String(count);
+  if (elements.reactivationReview) {
+    elements.reactivationReview.disabled = count === 0 || !elements.reactivationMessage?.value.trim();
+  }
+}
+
+function renderReactivationCandidates() {
+  if (!elements.reactivationCandidatesTable) return;
+  const candidates = state.reactivation.candidates || [];
+  elements.reactivationCandidatesTable.replaceChildren();
+  elements.reactivationCandidateCount.textContent = String(candidates.length);
+
+  if (!candidates.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.appendChild(createElement("div", "empty-state", "Nenhum lead encontrado com esses filtros."));
+    row.appendChild(cell);
+    elements.reactivationCandidatesTable.appendChild(row);
+  }
+
+  for (const candidate of candidates) {
+    const row = document.createElement("tr");
+    row.className = candidate.eligible ? "" : "reactivation-row-blocked";
+
+    const selectCell = document.createElement("td");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.disabled = !candidate.eligible;
+    checkbox.checked = state.reactivation.selected.has(Number(candidate.conversationId));
+    checkbox.setAttribute("aria-label", `Selecionar ${candidate.contactName}`);
+    checkbox.addEventListener("change", () => {
+      const id = Number(candidate.conversationId);
+      if (checkbox.checked) {
+        const existing = state.reactivation.selected.get(id);
+        state.reactivation.selected.set(id, existing || { sourceType: "tag" });
+      } else {
+        state.reactivation.selected.delete(id);
+      }
+      updateReactivationSelectionSummary();
+      renderReactivationCandidates();
+    });
+    selectCell.appendChild(checkbox);
+
+    const contactCell = document.createElement("td");
+    const contact = createElement("div", "reactivation-contact");
+    contact.append(
+      createElement("strong", null, candidate.contactName || `Contato #${candidate.conversationId}`),
+      createElement("span", null, candidate.phone || candidate.email || `Conversa #${candidate.conversationId}`),
+      createElement("small", null, `Conversa #${candidate.conversationId}`)
+    );
+    contactCell.appendChild(contact);
+
+    const reasonCell = document.createElement("td");
+    const chips = createElement("div", "reactivation-chips");
+    for (const label of candidate.matchedLabels || []) {
+      chips.appendChild(createElement("span", "reactivation-chip", reactivationLabelTitle(label)));
+    }
+    reasonCell.appendChild(chips);
+
+    const activityCell = createElement("td", null, candidate.lastActivityAt ? formatRelativeTime(candidate.lastActivityAt) : "—");
+    activityCell.title = candidate.lastActivityAt ? formatDate(candidate.lastActivityAt) : "";
+
+    const statusCell = document.createElement("td");
+    statusCell.appendChild(
+      createElement(
+        "span",
+        `reactivation-status ${candidate.eligible ? "is-eligible" : "is-blocked"}`,
+        candidate.eligible ? "Elegível" : "Bloqueado"
+      )
+    );
+    if (candidate.blockReason) statusCell.appendChild(createElement("small", "reactivation-block-reason", candidate.blockReason));
+
+    const actionCell = document.createElement("td");
+    const open = createElement("button", "button button-ghost button-small", "Abrir");
+    open.type = "button";
+    open.addEventListener("click", () => openOpportunityDrawer(candidate.conversationId));
+    actionCell.appendChild(open);
+
+    row.append(selectCell, contactCell, reasonCell, activityCell, statusCell, actionCell);
+    elements.reactivationCandidatesTable.appendChild(row);
+  }
+
+  const blocked = candidates.filter((item) => !item.eligible).length;
+  if (elements.reactivationBlockedSummary) {
+    elements.reactivationBlockedSummary.textContent = blocked
+      ? `${blocked} lead${blocked === 1 ? "" : "s"} encontrado${blocked === 1 ? "" : "s"} já está${blocked === 1 ? "" : "ão"} protegido${blocked === 1 ? "" : "s"} contra nova reativação.`
+      : "Nenhum bloqueio encontrado neste filtro.";
+  }
+  updateReactivationSelectionSummary();
+}
+
+function renderReactivationMetrics() {
+  const summary = state.reactivation.summary || {};
+  if (elements.reactivationMetricEligible) {
+    elements.reactivationMetricEligible.textContent = String(state.reactivation.serverEligibleCount || 0);
+  }
+  if (elements.reactivationMetricSent) elements.reactivationMetricSent.textContent = String(summary.sent || 0);
+  if (elements.reactivationMetricReplied) elements.reactivationMetricReplied.textContent = String(summary.replied || 0);
+  if (elements.reactivationMetricRate) elements.reactivationMetricRate.textContent = `${Number(summary.responseRate || 0).toFixed(1)}%`;
+  updateReactivationNavigation();
+}
+
+function reactivationCampaignStatusLabel(status) {
+  return {
+    queued: "Na fila",
+    running: "Enviando",
+    completed: "Concluída",
+    partial_failed: "Concluída com revisão",
+    cancelled: "Cancelada",
+  }[status] || status || "—";
+}
+
+async function loadReactivationCampaignRecipients(campaign, container, button) {
+  if (container.dataset.loaded === "1") {
+    container.classList.toggle("is-hidden");
+    button.textContent = container.classList.contains("is-hidden") ? "Ver detalhes" : "Ocultar detalhes";
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await apiRequest(`/api/crm/reactivations/campaigns/${campaign.id}/recipients`);
+    container.replaceChildren();
+    for (const recipient of response.recipients || []) {
+      const row = createElement("div", "reactivation-recipient-row");
+      const info = createElement("div");
+      info.append(
+        createElement("strong", null, recipient.contactName),
+        createElement("span", null, `Conversa #${recipient.conversationId} · ${recipient.sourceType === "manual" ? "inclusão manual" : "por etiqueta"}`)
+      );
+      const status = createElement("div", "reactivation-recipient-status");
+      status.appendChild(createElement("strong", null, recipient.status));
+      if (recipient.repliedAt) status.appendChild(createElement("small", null, "Cliente respondeu"));
+      else if (recipient.blockReason || recipient.lastError) {
+        status.appendChild(createElement("small", null, recipient.blockReason || recipient.lastError));
+      }
+      const open = createElement("button", "button button-ghost button-small", "Abrir");
+      open.type = "button";
+      open.addEventListener("click", () => openOpportunityDrawer(recipient.conversationId));
+      row.append(info, status, open);
+      container.appendChild(row);
+    }
+    if (!(response.recipients || []).length) {
+      container.appendChild(createElement("div", "empty-state", "Sem destinatários registrados."));
+    }
+    container.dataset.loaded = "1";
+    container.classList.remove("is-hidden");
+    button.textContent = "Ocultar detalhes";
+  } catch (error) {
+    showToast(`Não foi possível carregar os destinatários: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderReactivationHistory() {
+  if (!elements.reactivationHistory) return;
+  elements.reactivationHistory.replaceChildren();
+  const campaigns = state.reactivation.campaigns || [];
+  if (!campaigns.length) {
+    elements.reactivationHistory.appendChild(
+      createElement("div", "empty-state", "Nenhuma campanha de reativação registrada ainda.")
+    );
+    return;
+  }
+
+  for (const campaign of campaigns) {
+    const card = createElement("article", "reactivation-history-card");
+    const main = createElement("div", "reactivation-history-main");
+    main.append(
+      createElement("strong", null, campaign.name),
+      createElement("span", null, `${formatDate(campaign.createdAt)} · ${campaign.creatorName}`),
+      createElement("small", null, `Modelo: ${campaign.templateKey}`)
+    );
+    const metrics = createElement("div", "reactivation-history-metrics");
+    const values = [
+      ["Enviados", campaign.counts?.sent || 0],
+      ["Responderam", campaign.counts?.replied || 0],
+      ["Bloqueados", campaign.counts?.blocked || 0],
+      ["Falhas", (campaign.counts?.failed || 0) + (campaign.counts?.uncertain || 0)],
+    ];
+    for (const [label, value] of values) {
+      const metric = createElement("span");
+      metric.append(createElement("small", null, label), createElement("strong", null, value));
+      metrics.appendChild(metric);
+    }
+    const controls = createElement("div", "reactivation-history-controls");
+    controls.appendChild(
+      createElement(
+        "span",
+        `reactivation-status status-${campaign.status}`,
+        reactivationCampaignStatusLabel(campaign.status)
+      )
+    );
+    const detailsButton = createElement("button", "button button-ghost button-small", "Ver detalhes");
+    detailsButton.type = "button";
+    const details = createElement("div", "reactivation-recipient-list is-hidden");
+    detailsButton.addEventListener("click", () => loadReactivationCampaignRecipients(campaign, details, detailsButton));
+    controls.appendChild(detailsButton);
+    if (["queued", "running"].includes(campaign.status)) {
+      const cancel = createElement("button", "button button-danger button-small", "Cancelar pendentes");
+      cancel.type = "button";
+      cancel.addEventListener("click", async () => {
+        if (!window.confirm("Cancelar os envios que ainda não saíram desta campanha?")) return;
+        cancel.disabled = true;
+        try {
+          await apiRequest(`/api/crm/reactivations/campaigns/${campaign.id}/cancel`, { method: "POST" });
+          showToast("Envios pendentes cancelados.", "success");
+          await loadReactivationCenter({ silent: true });
+        } catch (error) {
+          showToast(`Não foi possível cancelar: ${error.message}`, "error");
+        } finally {
+          cancel.disabled = false;
+        }
+      });
+      controls.appendChild(cancel);
+    }
+    card.append(main, metrics, controls, details);
+    elements.reactivationHistory.appendChild(card);
+  }
+}
+
+function renderReactivationCenter() {
+  const config = state.reactivation.configuration;
+  if (!config) return;
+  if (elements.reactivationStoreName) {
+    elements.reactivationStoreName.value = config.organizationName || state.organization?.name || "Loja atual";
+  }
+  if (elements.reactivationDisabledBanner) {
+    elements.reactivationDisabledBanner.classList.toggle("is-hidden", Boolean(config.sendEnabled));
+  }
+  populateReactivationTemplates();
+  renderReactivationCandidates();
+  renderReactivationMetrics();
+  renderReactivationHistory();
+  if (elements.reactivationConfirm) elements.reactivationConfirm.disabled = !config.sendEnabled;
+}
+
+async function loadReactivationCenter(options = {}) {
+  if (!hasPermission("reactivations:manage") || state.reactivation.loading) return;
+  state.reactivation.loading = true;
+  if (elements.reactivationRefresh) elements.reactivationRefresh.disabled = true;
+  try {
+    const labels = selectedReactivationLabels();
+    const params = new URLSearchParams({
+      period: state.reactivation.period || "7d",
+      labels: labels.join(","),
+      search: state.reactivation.search || "",
+    });
+    const [candidateResponse, campaignResponse] = await Promise.all([
+      apiRequest(`/api/crm/reactivations/candidates?${params.toString()}`),
+      apiRequest("/api/crm/reactivations/campaigns?sync=1&limit=30"),
+    ]);
+    state.reactivation.configuration = candidateResponse.configuration || state.reactivation.configuration;
+    state.reactivation.candidates = Array.isArray(candidateResponse.candidates) ? candidateResponse.candidates : [];
+    state.reactivation.serverEligibleCount = Number(candidateResponse.eligibleCount || 0);
+    state.reactivation.campaigns = Array.isArray(campaignResponse.campaigns) ? campaignResponse.campaigns : [];
+    state.reactivation.summary = campaignResponse.summary || state.reactivation.summary;
+    renderReactivationCenter();
+    if (!options.silent) showToast("Central de reativação atualizada.", "success");
+  } catch (error) {
+    showToast(`Não foi possível carregar a reativação: ${error.message}`, "error");
+  } finally {
+    state.reactivation.loading = false;
+    if (elements.reactivationRefresh) elements.reactivationRefresh.disabled = false;
+  }
+}
+
+function selectAllEligibleReactivation() {
+  for (const candidate of state.reactivation.candidates || []) {
+    if (!candidate.eligible) continue;
+    const id = Number(candidate.conversationId);
+    if (!state.reactivation.selected.has(id)) state.reactivation.selected.set(id, { sourceType: "tag" });
+  }
+  renderReactivationCandidates();
+}
+
+function clearReactivationSelection() {
+  state.reactivation.selected.clear();
+  renderReactivationCandidates();
+}
+
+function openReactivationManualModal() {
+  elements.reactivationManualModal?.classList.add("is-open");
+  elements.reactivationManualModal?.setAttribute("aria-hidden", "false");
+  if (elements.reactivationManualSearch) {
+    elements.reactivationManualSearch.value = "";
+    elements.reactivationManualSearch.focus();
+  }
+  renderReactivationManualResults();
+}
+
+function closeReactivationManualModal() {
+  elements.reactivationManualModal?.classList.remove("is-open");
+  elements.reactivationManualModal?.setAttribute("aria-hidden", "true");
+}
+
+function renderReactivationManualResults() {
+  if (!elements.reactivationManualResults) return;
+  const query = safeLower(elements.reactivationManualSearch?.value || "");
+  const candidates = state.conversations
+    .filter((conversation) => {
+      if (clientReactivationTerminal(conversation)) return false;
+      const sender = getSender(conversation);
+      const haystack = [sender.name, sender.phone_number, sender.email, String(conversation.id)]
+        .join(" ")
+        .toLocaleLowerCase("pt-BR");
+      return !query || haystack.includes(query);
+    })
+    .slice(0, 40);
+  elements.reactivationManualResults.replaceChildren();
+  if (!candidates.length) {
+    elements.reactivationManualResults.appendChild(createElement("div", "empty-state", "Nenhum contato ativo encontrado."));
+    return;
+  }
+  for (const conversation of candidates) {
+    const sender = getSender(conversation);
+    const blocked = clientHasReactivationBlock(conversation);
+    const selected = state.reactivation.selected.has(Number(conversation.id));
+    const row = createElement("div", `reactivation-manual-row${blocked ? " is-blocked" : ""}`);
+    const info = createElement("div");
+    info.append(
+      createElement("strong", null, sender.name || `Contato #${conversation.id}`),
+      createElement("span", null, sender.phone_number || sender.email || `Conversa #${conversation.id}`),
+      createElement("small", null, blocked ? "Protegido pela etiqueta de reativação única" : `Conversa #${conversation.id}`)
+    );
+    const button = createElement(
+      "button",
+      selected ? "button button-ghost button-small" : "button button-primary button-small",
+      selected ? "Adicionado" : "Adicionar"
+    );
+    button.type = "button";
+    button.disabled = blocked || selected;
+    button.addEventListener("click", () => {
+      state.reactivation.selected.set(Number(conversation.id), { sourceType: "manual" });
+      updateReactivationSelectionSummary();
+      renderReactivationManualResults();
+      renderReactivationCandidates();
+    });
+    row.append(info, button);
+    elements.reactivationManualResults.appendChild(row);
+  }
+}
+
+function closeReactivationPreviewModal() {
+  elements.reactivationPreviewModal?.classList.remove("is-open");
+  elements.reactivationPreviewModal?.setAttribute("aria-hidden", "true");
+}
+
+function previewRenderedReactivationMessage() {
+  const template = elements.reactivationMessage?.value.trim() || "";
+  const firstSelection = reactivationSelectionEntries()[0];
+  const conversation = state.conversations.find(
+    (item) => Number(item.id) === Number(firstSelection?.conversationId)
+  );
+  const first = String(getSender(conversation)?.name || "tudo bem").trim().split(/\s+/)[0] || "tudo bem";
+  return template.replace(/{{\s*primeiro_nome\s*}}/g, first);
+}
+
+function openReactivationPreview() {
+  const selected = reactivationSelectionEntries();
+  const message = elements.reactivationMessage?.value.trim() || "";
+  if (!selected.length) {
+    showToast("Selecione pelo menos um lead para reativar.", "error");
+    return;
+  }
+  if (!message) {
+    showToast("Escreva a mensagem da reativação.", "error");
+    return;
+  }
+  const unsupported = [...message.matchAll(/{{\s*([^}]+?)\s*}}/g)]
+    .map((match) => match[1])
+    .filter((name) => name !== "primeiro_nome");
+  if (unsupported.length) {
+    showToast(`Variável não suportada: {{${unsupported[0]}}}`, "error");
+    return;
+  }
+  let blocked = 0;
+  for (const selection of selected) {
+    const candidate = state.reactivation.candidates.find(
+      (item) => Number(item.conversationId) === Number(selection.conversationId)
+    );
+    const conversation = state.conversations.find(
+      (item) => Number(item.id) === Number(selection.conversationId)
+    );
+    if (selection.sourceType === "tag" && candidate && !candidate.eligible) blocked += 1;
+    else if (clientHasReactivationBlock(conversation) || clientReactivationTerminal(conversation)) blocked += 1;
+  }
+  elements.reactivationPreviewSelected.textContent = String(selected.length);
+  elements.reactivationPreviewBlocked.textContent = String(blocked);
+  elements.reactivationPreviewEligible.textContent = String(Math.max(0, selected.length - blocked));
+  elements.reactivationPreviewMessage.textContent = previewRenderedReactivationMessage();
+  const sendEnabled = Boolean(state.reactivation.configuration?.sendEnabled);
+  elements.reactivationPreviewWarning.classList.toggle("is-hidden", sendEnabled);
+  elements.reactivationPreviewWarning.textContent = sendEnabled
+    ? ""
+    : "O envio continua desativado na implantação. A prévia funciona, mas a campanha só poderá ser criada após ativar REACTIVATION_SEND_ENABLED.";
+  elements.reactivationConfirm.disabled = !sendEnabled;
+  elements.reactivationPreviewModal.classList.add("is-open");
+  elements.reactivationPreviewModal.setAttribute("aria-hidden", "false");
+}
+
+async function confirmReactivationCampaign() {
+  const recipients = reactivationSelectionEntries();
+  if (!recipients.length) return;
+  elements.reactivationConfirm.disabled = true;
+  try {
+    const response = await apiRequest("/api/crm/reactivations/campaigns", {
+      method: "POST",
+      body: JSON.stringify({
+        name: elements.reactivationCampaignName.value.trim() || defaultReactivationCampaignName(),
+        templateKey: elements.reactivationTemplate.value || "custom",
+        messageTemplate: elements.reactivationMessage.value.trim(),
+        recipients,
+      }),
+    });
+    closeReactivationPreviewModal();
+    state.reactivation.selected.clear();
+    const queued = Number(response.queued || 0);
+    const blocked = Array.isArray(response.blocked) ? response.blocked.length : 0;
+    showToast(
+      blocked
+        ? `Campanha criada: ${queued} na fila e ${blocked} bloqueado${blocked === 1 ? "" : "s"}.`
+        : `Campanha criada com ${queued} envio${queued === 1 ? "" : "s"} na fila.`,
+      queued > 0 ? "success" : "error"
+    );
+    elements.reactivationCampaignName.value = defaultReactivationCampaignName();
+    await loadReactivationCenter({ silent: true });
+  } catch (error) {
+    showToast(`Não foi possível iniciar a reativação: ${error.message}`, "error");
+  } finally {
+    elements.reactivationConfirm.disabled = !state.reactivation.configuration?.sendEnabled;
+  }
+}
+
+let reactivationSearchTimer = null;
+function scheduleReactivationReload() {
+  if (reactivationSearchTimer) window.clearTimeout(reactivationSearchTimer);
+  reactivationSearchTimer = window.setTimeout(() => loadReactivationCenter({ silent: true }), 350);
+}
+
 function switchView(viewName) {
   state.currentView = viewName;
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("is-active"));
@@ -4017,6 +4572,7 @@ function switchView(viewName) {
     history: ["RESULTADOS", "Histórico encerrado"],
     archive: ["ORGANIZAÇÃO", "Oportunidades arquivadas"],
     conversations: ["ATENDIMENTO", "Conversas do Chatwoot"],
+    reactivations: ["RECUPERAÇÃO CONTROLADA", "Reativação de leads"],
     tasks: ["PRODUTIVIDADE", "Tarefas comerciais"],
     contacts: ["RELACIONAMENTO", "Contatos"],
     tutorials: ["CENTRAL DE AJUDA", "Tutoriais"],
@@ -4026,6 +4582,7 @@ function switchView(viewName) {
   elements.pageEyebrow.textContent = eyebrow;
   elements.pageTitle.textContent = title;
   if (viewName === "tutorials") loadTutorials({ silent: true });
+  if (viewName === "reactivations") loadReactivationCenter({ silent: true });
 }
 
 function clearFilters() {
@@ -4104,6 +4661,40 @@ function cacheElements() {
     refreshPresence: byId("refresh-presence"),
     currentUserStatusDot: byId("current-user-status-dot"),
     archiveNavItem: byId("archive-nav-item"),
+    reactivationNavItem: byId("reactivation-nav-item"),
+    reactivationNavCount: byId("reactivation-nav-count"),
+    reactivationRefresh: byId("reactivation-refresh"),
+    reactivationDisabledBanner: byId("reactivation-disabled-banner"),
+    reactivationMetricEligible: byId("reactivation-metric-eligible"),
+    reactivationMetricSent: byId("reactivation-metric-sent"),
+    reactivationMetricReplied: byId("reactivation-metric-replied"),
+    reactivationMetricRate: byId("reactivation-metric-rate"),
+    reactivationStoreName: byId("reactivation-store-name"),
+    reactivationPeriod: byId("reactivation-period"),
+    reactivationSearch: byId("reactivation-search"),
+    reactivationCandidateCount: byId("reactivation-candidate-count"),
+    reactivationCandidatesTable: byId("reactivation-candidates-table"),
+    reactivationBlockedSummary: byId("reactivation-blocked-summary"),
+    reactivationSelectionSummary: byId("reactivation-selection-summary"),
+    reactivationSelectAll: byId("reactivation-select-all"),
+    reactivationClearSelection: byId("reactivation-clear-selection"),
+    reactivationAddManual: byId("reactivation-add-manual"),
+    reactivationCampaignName: byId("reactivation-campaign-name"),
+    reactivationTemplate: byId("reactivation-template"),
+    reactivationMessage: byId("reactivation-message"),
+    reactivationComposeCount: byId("reactivation-compose-count"),
+    reactivationReview: byId("reactivation-review"),
+    reactivationHistory: byId("reactivation-history"),
+    reactivationManualModal: byId("reactivation-manual-modal"),
+    reactivationManualSearch: byId("reactivation-manual-search"),
+    reactivationManualResults: byId("reactivation-manual-results"),
+    reactivationPreviewModal: byId("reactivation-preview-modal"),
+    reactivationPreviewSelected: byId("reactivation-preview-selected"),
+    reactivationPreviewEligible: byId("reactivation-preview-eligible"),
+    reactivationPreviewBlocked: byId("reactivation-preview-blocked"),
+    reactivationPreviewMessage: byId("reactivation-preview-message"),
+    reactivationPreviewWarning: byId("reactivation-preview-warning"),
+    reactivationConfirm: byId("reactivation-confirm"),
     settingsAccountId: byId("settings-account-id"),
     settingsOrganizationName: byId("settings-organization-name"),
     settingsCurrentUser: byId("settings-current-user"),
@@ -4363,6 +4954,45 @@ function bindEvents() {
   elements.replyForm.addEventListener("submit", sendReply);
   elements.tutorialForm?.addEventListener("submit", saveTutorial);
   elements.tutorialCancelEdit?.addEventListener("click", resetTutorialForm);
+  elements.reactivationRefresh?.addEventListener("click", () => loadReactivationCenter());
+  elements.reactivationPeriod?.addEventListener("change", () => {
+    state.reactivation.period = elements.reactivationPeriod.value;
+    loadReactivationCenter({ silent: true });
+  });
+  document.querySelectorAll("[data-reactivation-label]").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (!selectedReactivationLabels().length) {
+        input.checked = true;
+        showToast("Mantenha pelo menos uma etiqueta de elegibilidade selecionada.", "error");
+        return;
+      }
+      loadReactivationCenter({ silent: true });
+    });
+  });
+  elements.reactivationSearch?.addEventListener("input", () => {
+    state.reactivation.search = elements.reactivationSearch.value.trim();
+    scheduleReactivationReload();
+  });
+  elements.reactivationSelectAll?.addEventListener("click", selectAllEligibleReactivation);
+  elements.reactivationClearSelection?.addEventListener("click", clearReactivationSelection);
+  elements.reactivationAddManual?.addEventListener("click", openReactivationManualModal);
+  elements.reactivationManualSearch?.addEventListener("input", renderReactivationManualResults);
+  elements.reactivationTemplate?.addEventListener("change", () => {
+    const template = state.reactivation.configuration?.templates?.find(
+      (item) => item.key === elements.reactivationTemplate.value
+    );
+    if (template) elements.reactivationMessage.value = template.message;
+    updateReactivationSelectionSummary();
+  });
+  elements.reactivationMessage?.addEventListener("input", updateReactivationSelectionSummary);
+  elements.reactivationReview?.addEventListener("click", openReactivationPreview);
+  elements.reactivationConfirm?.addEventListener("click", confirmReactivationCampaign);
+  document.querySelectorAll("[data-close-reactivation-manual]").forEach((element) => {
+    element.addEventListener("click", closeReactivationManualModal);
+  });
+  document.querySelectorAll("[data-close-reactivation-preview]").forEach((element) => {
+    element.addEventListener("click", closeReactivationPreviewModal);
+  });
   document.querySelectorAll("[data-tutorial-tab]").forEach((button) => {
     button.addEventListener("click", () => switchTutorialTab(button.dataset.tutorialTab));
   });
@@ -4482,7 +5112,11 @@ function bindEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (elements.tutorialPlayerModal?.classList.contains("is-open")) {
+    if (elements.reactivationPreviewModal?.classList.contains("is-open")) {
+      closeReactivationPreviewModal();
+    } else if (elements.reactivationManualModal?.classList.contains("is-open")) {
+      closeReactivationManualModal();
+    } else if (elements.tutorialPlayerModal?.classList.contains("is-open")) {
       closeTutorialPlayer();
     } else if (elements.transitionModal.classList.contains("is-open")) {
       closeTransitionModal();
@@ -4501,6 +5135,9 @@ function bindEvents() {
 document.addEventListener("DOMContentLoaded", () => {
   loadLocalConfiguration();
   cacheElements();
+  if (elements.reactivationCampaignName) {
+    elements.reactivationCampaignName.value = defaultReactivationCampaignName();
+  }
   bindEvents();
   renderFilterPresets();
   renderStageManager();

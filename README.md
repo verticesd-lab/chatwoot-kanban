@@ -2,7 +2,12 @@
 
 CRM comercial visual conectado ao Chatwoot. A interface mantém as conversas, mensagens, contatos, agentes, times, caixas e etiquetas no Chatwoot, enquanto organiza a operação comercial em um pipeline independente.
 
-## Versão atual: V1.3.3 — controle operacional
+## Versão atual: V1.3.6 — reativação manual controlada
+
+
+A V1.3.6 preserva as fundações anteriores e adiciona uma central de **Reativação** com seleção por etiquetas, inclusão manual de contatos existentes, templates editáveis, prévia obrigatória, fila persistente de envio, bloqueio de reativação única, auditoria e métricas de resposta. Consulte [CRM_V1.3.6_README.md](CRM_V1.3.6_README.md).
+
+### Base operacional preservada da V1.3.3
 
 A V1.3.3 preserva os escopos da V1.3.2 e acrescenta:
 
@@ -61,7 +66,8 @@ http://localhost:3000
 ```text
 src/
 ├── access-control.js # escopos, intervenções e prioridade operacional
-├── db.js             # banco central, autenticação, perfis e auditoria
+├── db.js             # banco central, autenticação, perfis, reativação e auditoria
+├── reactivation.js   # regras puras da reativação, templates e elegibilidade
 ├── server.js         # API do CRM e proxy seguro para o Chatwoot
 ├── index.html        # interface
 ├── script.js         # comportamento do painel
@@ -86,3 +92,8 @@ Os atributos comerciais continuam sendo gravados nas conversas do Chatwoot para 
 ## CRM V1.3.5
 
 Arquivamento de leads por contato para impedir que conversas antigas ou paralelas de leads de teste/sem valor operacional retornem ao Pipeline. Consulte `CRM_V1.3.5_README.md`.
+
+
+## CRM V1.3.6
+
+Central de reativação manual controlada para recuperar leads parados sem follow-up infinito. Consulte `CRM_V1.3.6_README.md`.

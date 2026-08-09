@@ -93,6 +93,11 @@
             <span class="nav-icon">◌</span>
             Conversas
           </button>
+          <button id="reactivation-nav-item" class="nav-item is-hidden" data-view="reactivations">
+            <span class="nav-icon">↻</span>
+            Reativação
+            <span id="reactivation-nav-count" class="nav-count is-hidden">0</span>
+          </button>
           <button class="nav-item" data-view="tasks">
             <span class="nav-icon">✓</span>
             Tarefas
@@ -341,6 +346,150 @@
                   <tbody id="conversations-table"></tbody>
                 </table>
               </div>
+            </article>
+          </section>
+
+          <section id="view-reactivations" class="view">
+            <div class="reactivation-heading">
+              <div>
+                <p class="eyebrow">RECUPERAÇÃO CONTROLADA</p>
+                <h2>↻ Reativação de leads</h2>
+                <p class="muted">Retome oportunidades paradas uma única vez, com seleção manual, prévia e auditoria.</p>
+              </div>
+              <button id="reactivation-refresh" class="button button-ghost" type="button">↻ Atualizar</button>
+            </div>
+
+            <div id="reactivation-disabled-banner" class="reactivation-warning is-hidden">
+              <strong>Envio protegido:</strong> a central está disponível para revisão, mas os disparos permanecem desativados até <code>REACTIVATION_SEND_ENABLED=true</code>.
+            </div>
+
+            <div class="reactivation-metrics" aria-label="Indicadores de reativação">
+              <article class="reactivation-metric-card">
+                <span>Elegíveis agora</span>
+                <strong id="reactivation-metric-eligible">0</strong>
+              </article>
+              <article class="reactivation-metric-card">
+                <span>Enviados</span>
+                <strong id="reactivation-metric-sent">0</strong>
+              </article>
+              <article class="reactivation-metric-card">
+                <span>Responderam</span>
+                <strong id="reactivation-metric-replied">0</strong>
+              </article>
+              <article class="reactivation-metric-card">
+                <span>Taxa de resposta</span>
+                <strong id="reactivation-metric-rate">0%</strong>
+              </article>
+            </div>
+
+            <div class="reactivation-layout">
+              <article class="panel reactivation-candidates-panel">
+                <div class="panel-header reactivation-panel-header">
+                  <div>
+                    <p class="eyebrow">1. SELECIONE</p>
+                    <h2>Leads elegíveis</h2>
+                    <p class="muted">A etiqueta “reativação única enviada” bloqueia automaticamente novo disparo.</p>
+                  </div>
+                  <span id="reactivation-candidate-count" class="count-badge">0</span>
+                </div>
+
+                <div class="reactivation-filters">
+                  <label>
+                    Loja
+                    <input id="reactivation-store-name" type="text" value="VR Multimarcas - Ingleses" readonly />
+                  </label>
+                  <label>
+                    Período
+                    <select id="reactivation-period">
+                      <option value="today">Hoje</option>
+                      <option value="3d">Últimos 3 dias</option>
+                      <option value="7d" selected>Últimos 7 dias</option>
+                      <option value="14d">Últimos 14 dias</option>
+                      <option value="30d">Últimos 30 dias</option>
+                      <option value="all">Todo o histórico ativo</option>
+                    </select>
+                  </label>
+                  <label class="reactivation-search-field">
+                    Buscar
+                    <input id="reactivation-search" type="search" placeholder="Nome, telefone ou conversa" />
+                  </label>
+                </div>
+
+                <fieldset class="reactivation-label-filters">
+                  <legend>Etiquetas de elegibilidade</legend>
+                  <label><input type="checkbox" data-reactivation-label value="aguardando-cpf-de-terceiros" checked /> Aguardando CPF de terceiros</label>
+                  <label><input type="checkbox" data-reactivation-label value="fora-do-horario" checked /> Fora do horário</label>
+                  <label><input type="checkbox" data-reactivation-label value="aguardando-retorno-do-cliente" checked /> Aguardando retorno do cliente</label>
+                </fieldset>
+
+                <div class="reactivation-selection-toolbar">
+                  <div id="reactivation-selection-summary" class="muted">0 selecionados</div>
+                  <div>
+                    <button id="reactivation-select-all" class="button button-ghost button-small" type="button">Selecionar elegíveis</button>
+                    <button id="reactivation-clear-selection" class="button button-ghost button-small" type="button">Limpar</button>
+                    <button id="reactivation-add-manual" class="button button-ghost button-small" type="button">+ Adicionar contato</button>
+                  </div>
+                </div>
+
+                <div class="table-scroll reactivation-table-scroll">
+                  <table class="reactivation-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Contato</th>
+                        <th>Motivo</th>
+                        <th>Última atividade</th>
+                        <th>Situação</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="reactivation-candidates-table"></tbody>
+                  </table>
+                </div>
+                <p id="reactivation-blocked-summary" class="reactivation-blocked-summary muted"></p>
+              </article>
+
+              <article class="panel reactivation-composer-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">2. PREPARE</p>
+                    <h2>Mensagem da reativação</h2>
+                  </div>
+                </div>
+                <label>
+                  Nome da campanha
+                  <input id="reactivation-campaign-name" type="text" maxlength="120" placeholder="Ex.: Retomada segunda-feira" />
+                </label>
+                <label>
+                  Modelo
+                  <select id="reactivation-template"></select>
+                </label>
+                <label>
+                  Mensagem
+                  <textarea id="reactivation-message" rows="7" maxlength="1200"></textarea>
+                </label>
+                <div class="reactivation-template-help">
+                  Use <code>{{primeiro_nome}}</code> para personalizar. O texto poderá ser revisado antes do envio.
+                </div>
+                <div class="reactivation-compose-footer">
+                  <div>
+                    <strong id="reactivation-compose-count">0</strong>
+                    <span>leads selecionados</span>
+                  </div>
+                  <button id="reactivation-review" class="button button-primary" type="button">Revisar reativação →</button>
+                </div>
+              </article>
+            </div>
+
+            <article class="panel reactivation-history-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">AUDITORIA</p>
+                  <h2>Histórico de reativações</h2>
+                  <p class="muted">Campanhas, bloqueios, falhas e respostas detectadas pelo Chatwoot.</p>
+                </div>
+              </div>
+              <div id="reactivation-history" class="reactivation-history"></div>
             </article>
           </section>
 
@@ -811,6 +960,56 @@
         </div>
       </section>
     </aside>
+
+    <div id="reactivation-manual-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-reactivation-manual></div>
+      <section class="modal-card reactivation-modal-card" role="dialog" aria-modal="true" aria-labelledby="reactivation-manual-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">INCLUSÃO MANUAL</p>
+            <h2 id="reactivation-manual-title">Adicionar contato existente</h2>
+            <p class="muted">A inclusão manual ignora apenas a exigência das etiquetas elegíveis. A proteção de reativação única continua obrigatória.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-reactivation-manual aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Buscar contato ou conversa
+          <input id="reactivation-manual-search" type="search" placeholder="Nome, telefone ou ID da conversa" />
+        </label>
+        <div id="reactivation-manual-results" class="reactivation-manual-results"></div>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-reactivation-manual>Fechar</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="reactivation-preview-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-reactivation-preview></div>
+      <section class="modal-card reactivation-preview-card" role="dialog" aria-modal="true" aria-labelledby="reactivation-preview-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">CONFIRMAÇÃO OBRIGATÓRIA</p>
+            <h2 id="reactivation-preview-title">Revisar reativação</h2>
+            <p class="muted">O servidor valida novamente cada lead antes de colocá-lo na fila.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-reactivation-preview aria-label="Fechar">×</button>
+        </div>
+        <div class="reactivation-preview-summary">
+          <div><span>Selecionados</span><strong id="reactivation-preview-selected">0</strong></div>
+          <div><span>Elegíveis na prévia</span><strong id="reactivation-preview-eligible">0</strong></div>
+          <div><span>Bloqueados</span><strong id="reactivation-preview-blocked">0</strong></div>
+        </div>
+        <div class="reactivation-preview-message">
+          <span>Exemplo da mensagem</span>
+          <p id="reactivation-preview-message"></p>
+        </div>
+        <div id="reactivation-preview-warning" class="reactivation-warning is-hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-reactivation-preview>Voltar e revisar</button>
+          <button id="reactivation-confirm" type="button" class="button button-primary">Confirmar e enviar</button>
+        </div>
+      </section>
+    </div>
 
     <div id="tutorial-player-modal" class="modal tutorial-player-modal" aria-hidden="true">
       <div class="modal-backdrop" data-close-tutorial-player></div>
