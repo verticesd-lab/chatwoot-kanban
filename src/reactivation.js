@@ -1,7 +1,7 @@
 const DEFAULT_ELIGIBLE_LABELS = [
-  "aguardando-cpf-de-terceiros",
-  "fora-do-horario",
-  "aguardando-retorno-do-cliente",
+  "aguardando-cpf-terceiro",
+  "fora-de-horario",
+  "aguardando-retorno-cliente",
 ];
 
 const DEFAULT_BLOCK_LABEL = "reativacao-unica-enviada";
@@ -33,8 +33,14 @@ const DEFAULT_TEMPLATES = [
   },
 ];
 
+const LEGACY_LABEL_ALIASES = Object.freeze({
+  "aguardando-cpf-de-terceiros": "aguardando-cpf-terceiro",
+  "fora-do-horario": "fora-de-horario",
+  "aguardando-retorno-do-cliente": "aguardando-retorno-cliente",
+});
+
 function normalizeLabel(value) {
-  return String(value || "")
+  const normalized = String(value || "")
     .trim()
     .toLocaleLowerCase("pt-BR")
     .normalize("NFD")
@@ -42,6 +48,7 @@ function normalizeLabel(value) {
     .replace(/[_\s]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
+  return LEGACY_LABEL_ALIASES[normalized] || normalized;
 }
 
 function parseEligibleLabels(value) {

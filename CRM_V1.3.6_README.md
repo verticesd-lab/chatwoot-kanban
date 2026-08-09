@@ -8,9 +8,9 @@ Recuperar oportunidades paradas por seleção humana, sem criar follow-up infini
 
 Etiquetas elegíveis padrão:
 
-- `aguardando-cpf-de-terceiros`
-- `fora-do-horario`
-- `aguardando-retorno-do-cliente`
+- `aguardando-cpf-terceiro`
+- `fora-de-horario`
+- `aguardando-retorno-cliente`
 
 Etiqueta de proteção padrão:
 
@@ -71,7 +71,7 @@ O usuário também precisa possuir `messages:send` para confirmar campanha.
 
 ```env
 REACTIVATION_SEND_ENABLED=false
-REACTIVATION_ELIGIBLE_LABELS=aguardando-cpf-de-terceiros,fora-do-horario,aguardando-retorno-do-cliente
+REACTIVATION_ELIGIBLE_LABELS=aguardando-cpf-terceiro,fora-de-horario,aguardando-retorno-cliente
 REACTIVATION_BLOCK_LABEL=reativacao-unica-enviada
 REACTIVATION_MAX_RECIPIENTS=100
 REACTIVATION_WORKER_INTERVAL_MS=3000
@@ -97,3 +97,8 @@ A detecção de resposta usa a última mensagem não-sistêmica fornecida pelo C
 ## Limite deliberado da V1
 
 A V1 não faz reativação automática recorrente, não escolhe leads por IA e não força segunda reativação. Métricas de CPF, aprovação e venda devem ser conectadas posteriormente ao AutoCore/Event Ledger para não inferir conversão a partir de etiquetas imprecisas.
+
+
+## Hotfix V1.3.6.1 — etiquetas reais do Chatwoot
+
+A central usa os slugs reais da operação: `aguardando-cpf-terceiro`, `fora-de-horario` e `aguardando-retorno-cliente`. Valores legados da primeira V1.3.6 continuam aceitos e são canonicalizados para os slugs reais.

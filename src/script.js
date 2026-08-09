@@ -4016,9 +4016,9 @@ async function saveTutorial(event) {
 
 
 const REACTIVATION_LABEL_TITLES = {
-  "aguardando-cpf-de-terceiros": "Aguardando CPF de terceiros",
-  "fora-do-horario": "Fora do horário",
-  "aguardando-retorno-do-cliente": "Aguardando retorno do cliente",
+  "aguardando-cpf-terceiro": "Aguardando CPF de terceiros",
+  "fora-de-horario": "Fora do horário",
+  "aguardando-retorno-cliente": "Aguardando retorno do cliente",
 };
 
 function normalizeReactivationLabel(value) {

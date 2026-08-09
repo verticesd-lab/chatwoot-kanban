@@ -8,22 +8,31 @@ assert.strictEqual(
   reactivation.normalizeLabel("Reativação Única Enviada"),
   "reativacao-unica-enviada"
 );
+assert.strictEqual(reactivation.normalizeLabel("fora-do-horario"), "fora-de-horario");
+assert.strictEqual(
+  reactivation.normalizeLabel("aguardando-retorno-do-cliente"),
+  "aguardando-retorno-cliente"
+);
+assert.strictEqual(
+  reactivation.normalizeLabel("aguardando-cpf-de-terceiros"),
+  "aguardando-cpf-terceiro"
+);
 assert.strictEqual(
   reactivation.normalizeLabel("aguardando cpf de terceiros"),
-  "aguardando-cpf-de-terceiros"
+  "aguardando-cpf-terceiro"
 );
 
 const config = reactivation.reactivationConfig({
   REACTIVATION_SEND_ENABLED: "false",
   REACTIVATION_ELIGIBLE_LABELS:
-    "aguardando cpf de terceiros,fora-do-horario,aguardando-retorno-do-cliente",
+    "aguardando cpf de terceiros,fora-de-horario,aguardando-retorno-cliente",
   REACTIVATION_BLOCK_LABEL: "Reativação Única Enviada",
 });
 assert.strictEqual(config.sendEnabled, false);
 assert.deepStrictEqual(config.eligibleLabels, [
-  "aguardando-cpf-de-terceiros",
-  "fora-do-horario",
-  "aguardando-retorno-do-cliente",
+  "aguardando-cpf-terceiro",
+  "fora-de-horario",
+  "aguardando-retorno-cliente",
 ]);
 assert.strictEqual(config.blockLabel, "reativacao-unica-enviada");
 
@@ -35,7 +44,7 @@ const conversation = {
   last_activity_at: Math.floor(Date.now() / 1000),
 };
 const snapshot = reactivation.candidateSnapshot(conversation, config);
-assert.deepStrictEqual(snapshot.matchedLabels, ["fora-do-horario"]);
+assert.deepStrictEqual(snapshot.matchedLabels, ["fora-de-horario"]);
 assert.strictEqual(snapshot.hasBlockLabel, false);
 assert.strictEqual(snapshot.terminal, false);
 assert.strictEqual(
@@ -82,7 +91,7 @@ try {
         contactName: "Maria da Silva",
         phone: "+5547999990000",
         sourceType: "tag",
-        sourceLabels: ["fora-do-horario"],
+        sourceLabels: ["fora-de-horario"],
         messageRendered: "Oi, Maria!",
         status: "queued",
       },
