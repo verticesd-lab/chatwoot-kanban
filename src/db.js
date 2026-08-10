@@ -443,6 +443,7 @@ function createDatabase() {
   ensureColumn(db, "archived_opportunities", "archive_scope", "TEXT NOT NULL DEFAULT 'conversation'");
   ensureColumn(db, "archived_opportunities", "contact_key", "TEXT");
   ensureColumn(db, "reactivation_recipients", "source_reason", "TEXT");
+  ensureColumn(db, "reactivation_recipients", "reply_message_id", "TEXT");
 
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
   ensureColumn(db, "memberships", "chatwoot_agent_id", "INTEGER");
@@ -2067,6 +2068,52 @@ function markReactivationReply({ organizationId, conversationId, repliedAt }) {
   return changed;
 }
 
+
+function markReactivationReplyFromIncoming({ organizationId, conversationId, repliedAt, replyMessageId = null }) {
+  const replyIso = String(repliedAt || "").trim();
+  if (!replyIso) return 0;
+  const rows = db.prepare(`
+    SELECT id, campaign_id FROM reactivation_recipients
+    WHERE organization_id = ?
+      AND conversation_id = ?
+      AND status = 'sent'
+      AND sent_at IS NOT NULL
+      AND sent_at < ?
+      AND replied_at IS NULL
+  `).all(organizationId, Number(conversationId), replyIso);
+  if (!rows.length) return 0;
+  const now = nowIso();
+  const update = db.prepare(`
+    UPDATE reactivation_recipients
+    SET replied_at = ?, reply_message_id = ?, updated_at = ?
+    WHERE id = ? AND replied_at IS NULL
+  `);
+  let changed = 0;
+  for (const row of rows) {
+    const result = update.run(replyIso, replyMessageId == null ? null : String(replyMessageId), now, row.id);
+    changed += Number(result.changes || 0);
+    if (result.changes) refreshReactivationCampaignStatus(row.campaign_id);
+  }
+  return changed;
+}
+
+function getOrganizationByChatwootAccountId(accountId) {
+  const row = db.prepare(`
+    SELECT id, name, slug, chatwoot_account_id
+    FROM organizations
+    WHERE chatwoot_account_id = ?
+    ORDER BY created_at ASC
+    LIMIT 1
+  `).get(Number(accountId));
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    chatwootAccountId: Number(row.chatwoot_account_id),
+  };
+}
+
 function listPendingReactivationReplyChecks(organizationId) {
   return db.prepare(`
     SELECT * FROM reactivation_recipients
@@ -2264,11 +2311,13 @@ module.exports = {
   markReactivationRecipientSent,
   markReactivationRecipientTerminal,
   markReactivationReply,
+  markReactivationReplyFromIncoming,
   listPendingReactivationReplyChecks,
   reactivationSummary,
   cancelReactivationCampaign,
   markStaleReactivationProcessingUncertain,
   getOrganizationIntegration,
+  getOrganizationByChatwootAccountId,
   logAudit,
   listAudit,
   closeDatabase,

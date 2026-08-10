@@ -88,6 +88,15 @@ assert(
   "resposta incoming obtida pelo endpoint /messages deve ser reconhecida"
 );
 
+
+assert.strictEqual(reactivation.isIncomingMessage({ message_type: 0 }), true);
+assert.strictEqual(reactivation.isIncomingMessage({ message_type: "incoming" }), true);
+assert.strictEqual(reactivation.isIncomingMessage({ message_type: 1 }), false);
+assert.strictEqual(
+  reactivation.messageTimestampIso({ created_at: 1786325280 }),
+  "2026-08-10T01:28:00.000Z"
+);
+
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-reactivation-test-"));
 process.env.CRM_DB_PATH = path.join(tempDir, "crm.sqlite");
 process.env.CRM_ENCRYPTION_KEY = "chave-de-teste-com-mais-de-24-caracteres";
@@ -153,12 +162,41 @@ try {
   assert.strictEqual(db.hasPriorSuccessfulReactivation(admin.organization_id, 501), true);
   assert.strictEqual(db.getReactivationProtectionStatus(admin.organization_id, 501), "sent");
 
-  const replyChanges = db.markReactivationReply({
+  const orgByAccount = db.getOrganizationByChatwootAccountId(4);
+  assert(orgByAccount, "organização deve ser resolvida pelo account_id do webhook");
+  assert.strictEqual(orgByAccount.id, admin.organization_id);
+
+  const sentRecipient = db.listReactivationRecipients(admin.organization_id, campaign.id)
+    .find((item) => item.conversationId === 501);
+  const tooEarlyReply = new Date(Date.parse(sentRecipient.sentAt) - 1000).toISOString();
+  assert.strictEqual(
+    db.markReactivationReplyFromIncoming({
+      organizationId: admin.organization_id,
+      conversationId: 501,
+      repliedAt: tooEarlyReply,
+      replyMessageId: "old-msg",
+    }),
+    0,
+    "incoming anterior ao envio não pode contar como resposta"
+  );
+
+  const replyChanges = db.markReactivationReplyFromIncoming({
     organizationId: admin.organization_id,
     conversationId: 501,
-    repliedAt: new Date().toISOString(),
+    repliedAt: new Date(Date.now() + 1000).toISOString(),
+    replyMessageId: "reply-1",
   });
   assert.strictEqual(replyChanges, 1);
+  assert.strictEqual(
+    db.markReactivationReplyFromIncoming({
+      organizationId: admin.organization_id,
+      conversationId: 501,
+      repliedAt: new Date(Date.now() + 2000).toISOString(),
+      replyMessageId: "reply-1",
+    }),
+    0,
+    "webhook duplicado deve ser idempotente"
+  );
   const summary = db.reactivationSummary(admin.organization_id);
   assert.strictEqual(summary.sent, 1);
   assert.strictEqual(summary.replied, 1);
@@ -175,4 +213,4 @@ try {
   fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
-console.log("CRM V1.3.6.4 reactivation reply-sync tests: OK");
+console.log("CRM V1.3.6.5 reactivation webhook reply-tracking tests: OK");

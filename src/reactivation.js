@@ -184,8 +184,13 @@ function terminalStage(conversation) {
 }
 
 function isIncomingMessage(message) {
-  const type = message?.message_type;
+  const type = message?.message_type ?? message?.messageType;
   return Number(type) === 0 || String(type || "").toLowerCase() === "incoming";
+}
+
+function messageTimestampIso(message) {
+  const timestamp = getTimestamp(message?.created_at) || getTimestamp(message?.updated_at);
+  return timestamp ? new Date(timestamp).toISOString() : null;
 }
 
 function latestIncomingAfter(conversation, isoTimestamp) {
@@ -243,6 +248,8 @@ module.exports = {
   validateManualSourceReason,
   renderMessage,
   terminalStage,
+  isIncomingMessage,
+  messageTimestampIso,
   latestIncomingAfter,
   candidateSnapshot,
 };

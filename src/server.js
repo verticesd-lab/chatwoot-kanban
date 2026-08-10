@@ -1,5 +1,6 @@
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 const path = require("path");
 const dotenv = require("dotenv");
 
@@ -42,7 +43,62 @@ app.use((req, res, next) => {
   );
   next();
 });
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({
+  limit: "1mb",
+  verify: (req, _res, buffer) => {
+    req.rawBody = Buffer.from(buffer);
+  },
+}));
+app.post("/api/integrations/chatwoot/reactivation-webhook", (req, res) => {
+  const verification = verifyChatwootWebhookSignature(req);
+  if (!verification.ok) {
+    return res.status(verification.status).json({ ok: false, error: verification.reason });
+  }
+
+  const payload = req.body || {};
+  if (String(payload.event || "") !== "message_created") {
+    return res.status(200).json({ ok: true, ignored: true, reason: "event_not_supported" });
+  }
+  if (!reactivation.isIncomingMessage(payload) || payload.private === true) {
+    return res.status(200).json({ ok: true, ignored: true, reason: "not_public_incoming" });
+  }
+
+  const accountId = webhookAccountId(payload);
+  const conversationId = webhookConversationId(payload);
+  const repliedAt = reactivation.messageTimestampIso(payload);
+  if (!accountId || !conversationId || !repliedAt) {
+    return res.status(200).json({ ok: true, ignored: true, reason: "missing_identity_or_timestamp" });
+  }
+
+  const organization = db.getOrganizationByChatwootAccountId(accountId);
+  if (!organization) {
+    return res.status(200).json({ ok: true, ignored: true, reason: "organization_not_found" });
+  }
+
+  const changed = db.markReactivationReplyFromIncoming({
+    organizationId: organization.id,
+    conversationId,
+    repliedAt,
+    replyMessageId: payload.id ?? null,
+  });
+
+  if (changed) {
+    db.logAudit({
+      organizationId: organization.id,
+      action: "reactivation.customer.replied.webhook",
+      entityType: "conversation",
+      entityId: conversationId,
+      metadata: {
+        repliedAt,
+        replyMessageId: payload.id ?? null,
+        deliveryId: String(req.headers["x-chatwoot-delivery"] || "").slice(0, 160) || null,
+      },
+    });
+  }
+
+  return res.status(200).json({ ok: true, matched: changed });
+});
+
 app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "index.html")));
 app.get("/script.js", (_req, res) => res.sendFile(path.join(__dirname, "script.js")));
 app.get("/styles.css", (_req, res) => res.sendFile(path.join(__dirname, "styles.css")));
@@ -112,6 +168,49 @@ function requirePermission(permission) {
 
 function chatwootHeaders(token) {
   return { api_access_token: token, "Content-Type": "application/json" };
+}
+
+function verifyChatwootWebhookSignature(req) {
+  const secret = String(process.env.REACTIVATION_CHATWOOT_WEBHOOK_SECRET || "").trim();
+  if (!secret) {
+    return { ok: false, status: 503, reason: "Webhook secret não configurado" };
+  }
+
+  const signature = String(req.headers["x-chatwoot-signature"] || "").trim();
+  const timestamp = String(req.headers["x-chatwoot-timestamp"] || "").trim();
+  if (!signature || !timestamp || !req.rawBody) {
+    return { ok: false, status: 401, reason: "Assinatura do webhook ausente" };
+  }
+
+  const timestampNumber = Number(timestamp);
+  const maxSkewSeconds = Math.min(3600, Math.max(60, Number(process.env.REACTIVATION_WEBHOOK_MAX_SKEW_SECONDS || 300)));
+  if (!Number.isFinite(timestampNumber) || Math.abs(Math.floor(Date.now() / 1000) - timestampNumber) > maxSkewSeconds) {
+    return { ok: false, status: 401, reason: "Timestamp do webhook fora da janela permitida" };
+  }
+
+  const expected = `sha256=${crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${req.rawBody.toString("utf8")}`)
+    .digest("hex")}`;
+
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature);
+  if (expectedBuffer.length !== signatureBuffer.length || !crypto.timingSafeEqual(expectedBuffer, signatureBuffer)) {
+    return { ok: false, status: 401, reason: "Assinatura do webhook inválida" };
+  }
+  return { ok: true };
+}
+
+function webhookConversationId(payload) {
+  const value = payload?.conversation?.id ?? payload?.conversation_id;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function webhookAccountId(payload) {
+  const value = payload?.account?.id ?? payload?.account_id;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 async function chatwootRequest(session, options) {
@@ -635,7 +734,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.3.6.3-reactivation-manual-audit",
+    version: "1.3.6.5-reactivation-webhook-reply-tracking",
     database: "sqlite-central",
   });
 });
@@ -2043,6 +2142,6 @@ if (REACTIVATION_CONFIG.sendEnabled) {
 }
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`CRM central V1.3.6 rodando na porta ${PORT}`);
+  console.log(`CRM central V1.3.6.5 rodando na porta ${PORT}`);
   console.log(`Banco central: ${db.databasePath}`);
 });

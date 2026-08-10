@@ -103,4 +103,10 @@ assert(html.includes('id="archive-scope-hint"'));
 assert(suppression.includes('"lead de teste"'));
 assert(suppression.includes('"sem valor operacional"'));
 
-console.log("CRM V1.3.6.4 static UI/API contract tests: OK");
+
+assert(server.includes('/api/integrations/chatwoot/reactivation-webhook'), 'webhook de reativação deve existir');
+assert(server.includes('x-chatwoot-signature'), 'webhook deve validar assinatura do Chatwoot');
+assert(server.includes('timingSafeEqual'), 'assinatura deve usar comparação constante');
+assert(server.includes('reactivation.customer.replied.webhook'), 'resposta via webhook deve gerar auditoria');
+
+console.log("CRM V1.3.6.5 static UI/API contract tests: OK");
