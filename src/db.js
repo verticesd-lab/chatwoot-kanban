@@ -404,6 +404,7 @@ function createDatabase() {
       contact_name TEXT NOT NULL,
       phone TEXT,
       source_type TEXT NOT NULL DEFAULT 'tag' CHECK (source_type IN ('tag','manual')),
+      source_reason TEXT,
       source_labels_json TEXT NOT NULL DEFAULT '[]',
       message_rendered TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','processing','sent','failed','blocked','uncertain','cancelled')),
@@ -441,6 +442,7 @@ function createDatabase() {
 
   ensureColumn(db, "archived_opportunities", "archive_scope", "TEXT NOT NULL DEFAULT 'conversation'");
   ensureColumn(db, "archived_opportunities", "contact_key", "TEXT");
+  ensureColumn(db, "reactivation_recipients", "source_reason", "TEXT");
 
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
   ensureColumn(db, "memberships", "chatwoot_agent_id", "INTEGER");
@@ -1758,6 +1760,7 @@ function reactivationRecipientRow(row) {
     contactName: row.contact_name,
     phone: row.phone || "",
     sourceType: row.source_type,
+    sourceReason: row.source_reason || null,
     sourceLabels: safeJsonParse(row.source_labels_json, []),
     messageRendered: row.message_rendered,
     status: row.status,
@@ -1840,9 +1843,9 @@ function createReactivationCampaign({
     const insert = db.prepare(`
       INSERT INTO reactivation_recipients
       (id, campaign_id, organization_id, conversation_id, contact_id, contact_name, phone,
-       source_type, source_labels_json, message_rendered, status, block_reason,
+       source_type, source_reason, source_labels_json, message_rendered, status, block_reason,
        attempts, queued_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     `);
     for (const recipient of normalizedRecipients) {
       insert.run(
@@ -1854,6 +1857,9 @@ function createReactivationCampaign({
         String(recipient.contactName || `Contato #${recipient.conversationId}`).slice(0, 120),
         String(recipient.phone || "").slice(0, 80) || null,
         recipient.sourceType === "manual" ? "manual" : "tag",
+        recipient.sourceType === "manual" && recipient.sourceReason
+          ? String(recipient.sourceReason).trim().slice(0, 160)
+          : null,
         JSON.stringify(Array.isArray(recipient.sourceLabels) ? recipient.sourceLabels : []),
         String(recipient.messageRendered || ""),
         ["queued", "blocked"].includes(recipient.status) ? recipient.status : "blocked",
@@ -1877,6 +1883,12 @@ function createReactivationCampaign({
       recipients: normalizedRecipients.length,
       queued: normalizedRecipients.filter((item) => item.status === "queued").length,
       blocked: normalizedRecipients.filter((item) => item.status === "blocked").length,
+      manualRecipients: normalizedRecipients
+        .filter((item) => item.sourceType === "manual")
+        .map((item) => ({
+          conversationId: Number(item.conversationId),
+          reason: item.sourceReason ? String(item.sourceReason).slice(0, 160) : null,
+        })),
     },
   });
   return getReactivationCampaign(organizationId, campaignId);

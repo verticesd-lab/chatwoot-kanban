@@ -583,7 +583,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.3.6-reactivation-center",
+    version: "1.3.6.3-reactivation-manual-audit",
     database: "sqlite-central",
   });
 });
@@ -1016,9 +1016,13 @@ app.post(
         const conversationId = Number(raw?.conversationId);
         if (!Number.isInteger(conversationId) || conversationId <= 0) continue;
         if (!unique.has(conversationId)) {
+          const sourceType = raw?.sourceType === "manual" ? "manual" : "tag";
           unique.set(conversationId, {
             conversationId,
-            sourceType: raw?.sourceType === "manual" ? "manual" : "tag",
+            sourceType,
+            sourceReason: sourceType === "manual"
+              ? reactivation.validateManualSourceReason(raw?.sourceReason)
+              : null,
           });
         }
       }
@@ -1041,6 +1045,7 @@ app.post(
             contactName: `Conversa #${selection.conversationId}`,
             phone: "",
             sourceType: selection.sourceType,
+            sourceReason: selection.sourceReason || null,
             sourceLabels: [],
             messageRendered: messageTemplate.replace(/{{\s*primeiro_nome\s*}}/g, "tudo bem"),
             status: "blocked",
@@ -1061,6 +1066,7 @@ app.post(
           contactName: snapshot.contactName,
           phone: snapshot.phone,
           sourceType: selection.sourceType,
+          sourceReason: selection.sourceReason || null,
           sourceLabels: snapshot.matchedLabels,
           messageRendered: reactivation.renderMessage(messageTemplate, conversation),
           status: blockReason ? "blocked" : "queued",

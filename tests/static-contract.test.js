@@ -53,6 +53,11 @@ for (const id of [
   "reactivation-candidates-table",
   "reactivation-preview-modal",
   "reactivation-manual-modal",
+  "reactivation-selected-panel",
+  "reactivation-selected-list",
+  "reactivation-manual-reason",
+  "reactivation-manual-selected-list",
+  "reactivation-preview-recipients",
 ]) {
   assert(htmlIds.includes(id), `Elemento da V1.3.3 ausente: ${id}`);
 }
@@ -64,6 +69,15 @@ assert(styles.includes("CRM V1.3.3 — controle operacional"));
 assert(styles.includes("CRM V1.3.4 — central de tutoriais"));
 assert(styles.includes("CRM V1.3.6 — central de reativação manual"));
 assert(script.includes("function renderReactivationCenter()"));
+assert(script.includes("function reactivationDisplayCandidates()"));
+assert(script.includes('sourceType: "manual"'));
+assert(script.includes('"Inclusão manual"'));
+assert(script.includes("sourceReason"));
+assert(script.includes("function renderReactivationSelectedList()"));
+assert(script.includes("function renderReactivationManualSelected()"));
+assert(script.includes('"Remover"'));
+assert(server.includes("validateManualSourceReason"));
+assert(styles.includes("CRM V1.3.6.3 — inclusão manual auditável"));
 assert(server.includes('require("./reactivation")'));
 assert(server.includes("REACTIVATION_SEND_ENABLED"));
 assert(html.includes('value="aguardando-cpf-terceiro"'));
@@ -86,4 +100,4 @@ assert(html.includes('id="archive-scope-hint"'));
 assert(suppression.includes('"lead de teste"'));
 assert(suppression.includes('"sem valor operacional"'));
 
-console.log("CRM V1.3.6 static UI/API contract tests: OK");
+console.log("CRM V1.3.6.3 static UI/API contract tests: OK");

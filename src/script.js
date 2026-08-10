@@ -4109,7 +4109,109 @@ function reactivationSelectionEntries() {
   return [...state.reactivation.selected.entries()].map(([conversationId, value]) => ({
     conversationId: Number(conversationId),
     sourceType: value?.sourceType === "manual" ? "manual" : "tag",
+    sourceReason: value?.sourceType === "manual" ? String(value?.sourceReason || "").trim() : null,
   }));
+}
+
+function reactivationSelectionConversation(conversationId) {
+  return state.conversations.find((item) => Number(item.id) === Number(conversationId)) || null;
+}
+
+function reactivationSelectionCandidate(conversationId) {
+  return (state.reactivation.candidates || []).find(
+    (item) => Number(item.conversationId) === Number(conversationId)
+  ) || null;
+}
+
+function reactivationSelectionPresentation(conversationId, selection) {
+  const candidate = reactivationSelectionCandidate(conversationId);
+  const conversation = reactivationSelectionConversation(conversationId);
+  const sender = getSender(conversation);
+  const name = candidate?.contactName || sender.name || `Contato #${conversationId}`;
+  const phone = candidate?.phone || sender.phone_number || sender.email || "";
+  const matchedLabels = Array.isArray(candidate?.matchedLabels) ? candidate.matchedLabels : [];
+  const sourceType = selection?.sourceType === "manual" ? "manual" : "tag";
+  const sourceReason = sourceType === "manual" ? String(selection?.sourceReason || "").trim() : "";
+  return { name, phone, matchedLabels, sourceType, sourceReason };
+}
+
+function removeReactivationSelection(conversationId) {
+  state.reactivation.selected.delete(Number(conversationId));
+  updateReactivationSelectionSummary();
+  renderReactivationCandidates();
+  renderReactivationManualSelected();
+  renderReactivationManualResults();
+}
+
+function renderReactivationSelectedList() {
+  if (!elements.reactivationSelectedPanel || !elements.reactivationSelectedList) return;
+  const entries = [...state.reactivation.selected.entries()];
+  elements.reactivationSelectedList.replaceChildren();
+  elements.reactivationSelectedCount.textContent = String(entries.length);
+  elements.reactivationSelectedPanel.classList.toggle("is-hidden", entries.length === 0);
+
+  for (const [conversationId, selection] of entries) {
+    const display = reactivationSelectionPresentation(conversationId, selection);
+    const row = createElement("div", "reactivation-selected-row");
+    const info = createElement("div", "reactivation-selected-info");
+    info.append(
+      createElement("strong", null, display.name),
+      createElement("span", null, display.phone || `Conversa #${conversationId}`)
+    );
+    const source = createElement("div", "reactivation-selected-source");
+    if (display.sourceType === "manual") {
+      source.append(
+        createElement("span", "reactivation-chip", "Inclusão manual"),
+        createElement("small", null, display.sourceReason || "Motivo não informado")
+      );
+    } else {
+      const labels = display.matchedLabels.length
+        ? display.matchedLabels.map(reactivationLabelTitle).join(" · ")
+        : "Selecionado por etiqueta";
+      source.append(
+        createElement("span", "reactivation-chip", "Por etiqueta"),
+        createElement("small", null, labels)
+      );
+    }
+    const remove = createElement("button", "button button-ghost button-small", "Remover");
+    remove.type = "button";
+    remove.addEventListener("click", () => removeReactivationSelection(conversationId));
+    row.append(info, source, remove);
+    elements.reactivationSelectedList.appendChild(row);
+  }
+}
+
+function reactivationDisplayCandidates() {
+  const serverCandidates = Array.isArray(state.reactivation.candidates) ? state.reactivation.candidates : [];
+  const existingIds = new Set(serverCandidates.map((candidate) => Number(candidate.conversationId)));
+  const manualCandidates = [];
+
+  for (const [conversationId, selection] of state.reactivation.selected.entries()) {
+    const id = Number(conversationId);
+    if (selection?.sourceType !== "manual" || existingIds.has(id)) continue;
+
+    const conversation = state.conversations.find((item) => Number(item.id) === id);
+    if (!conversation) continue;
+    const sender = getSender(conversation);
+    manualCandidates.push({
+      conversationId: id,
+      contactName: sender.name || `Contato #${id}`,
+      phone: sender.phone_number || "",
+      email: sender.email || "",
+      matchedLabels: [],
+      lastActivityAt: conversation.last_activity_at || conversation.updated_at || conversation.created_at || null,
+      eligible: !clientHasReactivationBlock(conversation) && !clientReactivationTerminal(conversation),
+      blockReason: clientHasReactivationBlock(conversation)
+        ? "Etiqueta de proteção 'reativacao-unica-enviada' já aplicada"
+        : clientReactivationTerminal(conversation)
+          ? "Conversa encerrada, ganha ou perdida"
+          : null,
+      sourceType: "manual",
+      sourceReason: String(selection?.sourceReason || "").trim(),
+    });
+  }
+
+  return [...manualCandidates, ...serverCandidates];
 }
 
 function updateReactivationSelectionSummary() {
@@ -4121,11 +4223,12 @@ function updateReactivationSelectionSummary() {
   if (elements.reactivationReview) {
     elements.reactivationReview.disabled = count === 0 || !elements.reactivationMessage?.value.trim();
   }
+  renderReactivationSelectedList();
 }
 
 function renderReactivationCandidates() {
   if (!elements.reactivationCandidatesTable) return;
-  const candidates = state.reactivation.candidates || [];
+  const candidates = reactivationDisplayCandidates();
   elements.reactivationCandidatesTable.replaceChildren();
   elements.reactivationCandidateCount.textContent = String(candidates.length);
 
@@ -4172,8 +4275,15 @@ function renderReactivationCandidates() {
 
     const reasonCell = document.createElement("td");
     const chips = createElement("div", "reactivation-chips");
-    for (const label of candidate.matchedLabels || []) {
-      chips.appendChild(createElement("span", "reactivation-chip", reactivationLabelTitle(label)));
+    if (candidate.sourceType === "manual") {
+      chips.appendChild(createElement("span", "reactivation-chip", "Inclusão manual"));
+      if (candidate.sourceReason) {
+        chips.appendChild(createElement("small", "reactivation-source-reason", candidate.sourceReason));
+      }
+    } else {
+      for (const label of candidate.matchedLabels || []) {
+        chips.appendChild(createElement("span", "reactivation-chip", reactivationLabelTitle(label)));
+      }
     }
     reasonCell.appendChild(chips);
 
@@ -4247,6 +4357,9 @@ async function loadReactivationCampaignRecipients(campaign, container, button) {
         createElement("strong", null, recipient.contactName),
         createElement("span", null, `Conversa #${recipient.conversationId} · ${recipient.sourceType === "manual" ? "inclusão manual" : "por etiqueta"}`)
       );
+      if (recipient.sourceType === "manual" && recipient.sourceReason) {
+        info.appendChild(createElement("small", null, `Motivo: ${recipient.sourceReason}`));
+      }
       const status = createElement("div", "reactivation-recipient-status");
       status.appendChild(createElement("strong", null, recipient.status));
       if (recipient.repliedAt) status.appendChild(createElement("small", null, "Cliente respondeu"));
@@ -4397,6 +4510,8 @@ function selectAllEligibleReactivation() {
 function clearReactivationSelection() {
   state.reactivation.selected.clear();
   renderReactivationCandidates();
+  renderReactivationManualSelected();
+  renderReactivationManualResults();
 }
 
 function openReactivationManualModal() {
@@ -4404,14 +4519,55 @@ function openReactivationManualModal() {
   elements.reactivationManualModal?.setAttribute("aria-hidden", "false");
   if (elements.reactivationManualSearch) {
     elements.reactivationManualSearch.value = "";
-    elements.reactivationManualSearch.focus();
   }
+  renderReactivationManualReasonState();
+  renderReactivationManualSelected();
   renderReactivationManualResults();
+  elements.reactivationManualSearch?.focus();
 }
 
 function closeReactivationManualModal() {
   elements.reactivationManualModal?.classList.remove("is-open");
   elements.reactivationManualModal?.setAttribute("aria-hidden", "true");
+}
+
+function renderReactivationManualReasonState() {
+  const isOther = elements.reactivationManualReason?.value === "Outro";
+  elements.reactivationManualReasonOtherWrap?.classList.toggle("is-hidden", !isOther);
+  if (!isOther && elements.reactivationManualReasonOther) {
+    elements.reactivationManualReasonOther.value = "";
+  }
+}
+
+function currentReactivationManualReason() {
+  const base = String(elements.reactivationManualReason?.value || "").trim();
+  if (!base) return "";
+  if (base !== "Outro") return base;
+  return String(elements.reactivationManualReasonOther?.value || "").trim().replace(/\s+/g, " ").slice(0, 160);
+}
+
+function renderReactivationManualSelected() {
+  if (!elements.reactivationManualSelectedPanel || !elements.reactivationManualSelectedList) return;
+  const entries = [...state.reactivation.selected.entries()].filter(([, selection]) => selection?.sourceType === "manual");
+  elements.reactivationManualSelectedList.replaceChildren();
+  elements.reactivationManualSelectedCount.textContent = String(entries.length);
+  elements.reactivationManualSelectedPanel.classList.toggle("is-hidden", entries.length === 0);
+
+  for (const [conversationId, selection] of entries) {
+    const display = reactivationSelectionPresentation(conversationId, selection);
+    const row = createElement("div", "reactivation-manual-selected-row");
+    const info = createElement("div");
+    info.append(
+      createElement("strong", null, display.name),
+      createElement("span", null, display.phone || `Conversa #${conversationId}`),
+      createElement("small", null, `Motivo: ${display.sourceReason || "—"}`)
+    );
+    const remove = createElement("button", "button button-ghost button-small", "Remover");
+    remove.type = "button";
+    remove.addEventListener("click", () => removeReactivationSelection(conversationId));
+    row.append(info, remove);
+    elements.reactivationManualSelectedList.appendChild(row);
+  }
 }
 
 function renderReactivationManualResults() {
@@ -4435,27 +4591,56 @@ function renderReactivationManualResults() {
   for (const conversation of candidates) {
     const sender = getSender(conversation);
     const blocked = clientHasReactivationBlock(conversation);
-    const selected = state.reactivation.selected.has(Number(conversation.id));
+    const selection = state.reactivation.selected.get(Number(conversation.id));
+    const selectedByTag = selection?.sourceType === "tag";
+    const selectedManually = selection?.sourceType === "manual";
     const row = createElement("div", `reactivation-manual-row${blocked ? " is-blocked" : ""}`);
     const info = createElement("div");
     info.append(
       createElement("strong", null, sender.name || `Contato #${conversation.id}`),
       createElement("span", null, sender.phone_number || sender.email || `Conversa #${conversation.id}`),
-      createElement("small", null, blocked ? "Protegido pela etiqueta de reativação única" : `Conversa #${conversation.id}`)
+      createElement(
+        "small",
+        null,
+        blocked
+          ? "Protegido pela etiqueta de reativação única"
+          : selectedManually
+            ? `Incluído manualmente · ${selection.sourceReason || "motivo não informado"}`
+            : selectedByTag
+              ? "Já selecionado pela lista de etiquetas"
+              : `Conversa #${conversation.id}`
+      )
     );
-    const button = createElement(
-      "button",
-      selected ? "button button-ghost button-small" : "button button-primary button-small",
-      selected ? "Adicionado" : "Adicionar"
-    );
-    button.type = "button";
-    button.disabled = blocked || selected;
-    button.addEventListener("click", () => {
-      state.reactivation.selected.set(Number(conversation.id), { sourceType: "manual" });
-      updateReactivationSelectionSummary();
-      renderReactivationManualResults();
-      renderReactivationCandidates();
-    });
+    let button;
+    if (selectedManually) {
+      button = createElement("button", "button button-ghost button-small", "Remover");
+      button.type = "button";
+      button.addEventListener("click", () => removeReactivationSelection(conversation.id));
+    } else if (selectedByTag) {
+      button = createElement("button", "button button-ghost button-small", "Selecionado por etiqueta");
+      button.type = "button";
+      button.disabled = true;
+    } else {
+      button = createElement("button", "button button-primary button-small", "Adicionar");
+      button.type = "button";
+      button.disabled = blocked;
+      button.addEventListener("click", () => {
+        const reason = currentReactivationManualReason();
+        if (reason.length < 3) {
+          showToast("Informe o motivo da inclusão manual antes de adicionar o contato.", "error");
+          elements.reactivationManualReason?.focus();
+          return;
+        }
+        state.reactivation.selected.set(Number(conversation.id), {
+          sourceType: "manual",
+          sourceReason: reason,
+        });
+        updateReactivationSelectionSummary();
+        renderReactivationManualSelected();
+        renderReactivationManualResults();
+        renderReactivationCandidates();
+      });
+    }
     row.append(info, button);
     elements.reactivationManualResults.appendChild(row);
   }
@@ -4476,6 +4661,40 @@ function previewRenderedReactivationMessage() {
   return template.replace(/{{\s*primeiro_nome\s*}}/g, first);
 }
 
+function renderReactivationPreviewRecipients(selected) {
+  if (!elements.reactivationPreviewRecipients) return;
+  elements.reactivationPreviewRecipients.replaceChildren();
+  for (const selection of selected) {
+    const display = reactivationSelectionPresentation(selection.conversationId, selection);
+    const row = createElement("div", "reactivation-preview-recipient-row");
+    const info = createElement("div");
+    info.append(
+      createElement("strong", null, display.name),
+      createElement("span", null, `Conversa #${selection.conversationId}`)
+    );
+    const origin = createElement("div", "reactivation-preview-recipient-origin");
+    if (selection.sourceType === "manual") {
+      origin.append(
+        createElement("span", "reactivation-chip", "Inclusão manual"),
+        createElement("small", null, selection.sourceReason || "Motivo não informado")
+      );
+    } else {
+      origin.append(
+        createElement("span", "reactivation-chip", "Por etiqueta"),
+        createElement(
+          "small",
+          null,
+          display.matchedLabels.length
+            ? display.matchedLabels.map(reactivationLabelTitle).join(" · ")
+            : "Etiqueta elegível"
+        )
+      );
+    }
+    row.append(info, origin);
+    elements.reactivationPreviewRecipients.appendChild(row);
+  }
+}
+
 function openReactivationPreview() {
   const selected = reactivationSelectionEntries();
   const message = elements.reactivationMessage?.value.trim() || "";
@@ -4494,6 +4713,12 @@ function openReactivationPreview() {
     showToast(`Variável não suportada: {{${unsupported[0]}}}`, "error");
     return;
   }
+  for (const selection of selected) {
+    if (selection.sourceType === "manual" && String(selection.sourceReason || "").trim().length < 3) {
+      showToast(`Informe o motivo da inclusão manual da conversa #${selection.conversationId}.`, "error");
+      return;
+    }
+  }
   let blocked = 0;
   for (const selection of selected) {
     const candidate = state.reactivation.candidates.find(
@@ -4508,6 +4733,7 @@ function openReactivationPreview() {
   elements.reactivationPreviewSelected.textContent = String(selected.length);
   elements.reactivationPreviewBlocked.textContent = String(blocked);
   elements.reactivationPreviewEligible.textContent = String(Math.max(0, selected.length - blocked));
+  renderReactivationPreviewRecipients(selected);
   elements.reactivationPreviewMessage.textContent = previewRenderedReactivationMessage();
   const sendEnabled = Boolean(state.reactivation.configuration?.sendEnabled);
   elements.reactivationPreviewWarning.classList.toggle("is-hidden", sendEnabled);
@@ -4685,11 +4911,21 @@ function cacheElements() {
     reactivationComposeCount: byId("reactivation-compose-count"),
     reactivationReview: byId("reactivation-review"),
     reactivationHistory: byId("reactivation-history"),
+    reactivationSelectedPanel: byId("reactivation-selected-panel"),
+    reactivationSelectedCount: byId("reactivation-selected-count"),
+    reactivationSelectedList: byId("reactivation-selected-list"),
     reactivationManualModal: byId("reactivation-manual-modal"),
+    reactivationManualReason: byId("reactivation-manual-reason"),
+    reactivationManualReasonOtherWrap: byId("reactivation-manual-reason-other-wrap"),
+    reactivationManualReasonOther: byId("reactivation-manual-reason-other"),
+    reactivationManualSelectedPanel: byId("reactivation-manual-selected-panel"),
+    reactivationManualSelectedCount: byId("reactivation-manual-selected-count"),
+    reactivationManualSelectedList: byId("reactivation-manual-selected-list"),
     reactivationManualSearch: byId("reactivation-manual-search"),
     reactivationManualResults: byId("reactivation-manual-results"),
     reactivationPreviewModal: byId("reactivation-preview-modal"),
     reactivationPreviewSelected: byId("reactivation-preview-selected"),
+    reactivationPreviewRecipients: byId("reactivation-preview-recipients"),
     reactivationPreviewEligible: byId("reactivation-preview-eligible"),
     reactivationPreviewBlocked: byId("reactivation-preview-blocked"),
     reactivationPreviewMessage: byId("reactivation-preview-message"),
@@ -4976,6 +5212,11 @@ function bindEvents() {
   elements.reactivationSelectAll?.addEventListener("click", selectAllEligibleReactivation);
   elements.reactivationClearSelection?.addEventListener("click", clearReactivationSelection);
   elements.reactivationAddManual?.addEventListener("click", openReactivationManualModal);
+  elements.reactivationManualReason?.addEventListener("change", () => {
+    renderReactivationManualReasonState();
+    renderReactivationManualResults();
+  });
+  elements.reactivationManualReasonOther?.addEventListener("input", renderReactivationManualResults);
   elements.reactivationManualSearch?.addEventListener("input", renderReactivationManualResults);
   elements.reactivationTemplate?.addEventListener("change", () => {
     const template = state.reactivation.configuration?.templates?.find(

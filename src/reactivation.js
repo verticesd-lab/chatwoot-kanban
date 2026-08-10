@@ -131,6 +131,21 @@ function firstName(value) {
   return name.split(/\s+/)[0].replace(/[{}<>]/g, "").slice(0, 50);
 }
 
+function validateManualSourceReason(value) {
+  const reason = String(value || "").trim().replace(/\s+/g, " ");
+  if (reason.length < 3) {
+    const error = new Error("Informe o motivo da inclusão manual");
+    error.status = 400;
+    throw error;
+  }
+  if (reason.length > 160) {
+    const error = new Error("O motivo da inclusão manual deve possuir no máximo 160 caracteres");
+    error.status = 400;
+    throw error;
+  }
+  return reason;
+}
+
 function validateMessageTemplate(value) {
   const message = String(value || "").trim();
   if (!message) {
@@ -225,6 +240,7 @@ module.exports = {
   matchesPeriod,
   senderForConversation,
   validateMessageTemplate,
+  validateManualSourceReason,
   renderMessage,
   terminalStage,
   latestIncomingAfter,

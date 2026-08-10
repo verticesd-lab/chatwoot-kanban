@@ -55,6 +55,14 @@ assert.throws(
   () => reactivation.validateMessageTemplate("Oi {{cpf}}"),
   /Variável não suportada/
 );
+assert.strictEqual(
+  reactivation.validateManualSourceReason("  Cliente pediu retorno  "),
+  "Cliente pediu retorno"
+);
+assert.throws(
+  () => reactivation.validateManualSourceReason(""),
+  /motivo da inclusão manual/i
+);
 
 const incomingConversation = {
   last_non_activity_message: {
@@ -99,6 +107,7 @@ try {
         conversationId: 502,
         contactName: "Bloqueado",
         sourceType: "manual",
+        sourceReason: "Solicitação do SDR/Gerente",
         sourceLabels: [],
         messageRendered: "Oi!",
         status: "blocked",
@@ -109,6 +118,10 @@ try {
   assert.strictEqual(campaign.counts.total, 2);
   assert.strictEqual(campaign.counts.queued, 1);
   assert.strictEqual(campaign.counts.blocked, 1);
+  const recipients = db.listReactivationRecipients(admin.organization_id, campaign.id);
+  const manualRecipient = recipients.find((item) => item.conversationId === 502);
+  assert(manualRecipient, "destinatário manual deve existir");
+  assert.strictEqual(manualRecipient.sourceReason, "Solicitação do SDR/Gerente");
 
   const claimed = db.claimNextReactivationRecipient();
   assert(claimed, "destinatário deve ser reivindicado pela fila");
@@ -146,4 +159,4 @@ try {
   fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
-console.log("CRM V1.3.6 reactivation center tests: OK");
+console.log("CRM V1.3.6.3 reactivation manual audit tests: OK");

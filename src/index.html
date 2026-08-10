@@ -431,6 +431,17 @@
                   </div>
                 </div>
 
+                <section id="reactivation-selected-panel" class="reactivation-selected-panel is-hidden" aria-live="polite">
+                  <div class="reactivation-selected-panel-header">
+                    <div>
+                      <strong>Selecionados para esta campanha</strong>
+                      <small>Todos os contatos escolhidos ficam visíveis aqui, inclusive inclusões manuais fora das etiquetas.</small>
+                    </div>
+                    <span id="reactivation-selected-count" class="count-badge">0</span>
+                  </div>
+                  <div id="reactivation-selected-list" class="reactivation-selected-list"></div>
+                </section>
+
                 <div class="table-scroll reactivation-table-scroll">
                   <table class="reactivation-table">
                     <thead>
@@ -972,6 +983,33 @@
           </div>
           <button type="button" class="icon-button" data-close-reactivation-manual aria-label="Fechar">×</button>
         </div>
+        <div class="reactivation-manual-reason-grid">
+          <label>
+            Motivo da inclusão manual
+            <select id="reactivation-manual-reason">
+              <option value="">Selecione um motivo</option>
+              <option value="Cliente pediu retorno">Cliente pediu retorno</option>
+              <option value="Oportunidade específica">Oportunidade específica</option>
+              <option value="Recuperação comercial">Recuperação comercial</option>
+              <option value="Solicitação do SDR/Gerente">Solicitação do SDR/Gerente</option>
+              <option value="Outro">Outro</option>
+            </select>
+          </label>
+          <label id="reactivation-manual-reason-other-wrap" class="is-hidden">
+            Detalhe do motivo
+            <input id="reactivation-manual-reason-other" type="text" maxlength="160" placeholder="Descreva brevemente o motivo" />
+          </label>
+        </div>
+        <p class="reactivation-manual-audit-note">O motivo é obrigatório, fica visível na revisão e é registrado junto ao destinatário da campanha.</p>
+
+        <section id="reactivation-manual-selected-panel" class="reactivation-manual-selected-panel is-hidden">
+          <div class="reactivation-manual-selected-header">
+            <strong>Adicionados manualmente</strong>
+            <span id="reactivation-manual-selected-count" class="count-badge">0</span>
+          </div>
+          <div id="reactivation-manual-selected-list" class="reactivation-manual-selected-list"></div>
+        </section>
+
         <label>
           Buscar contato ou conversa
           <input id="reactivation-manual-search" type="search" placeholder="Nome, telefone ou ID da conversa" />
@@ -998,6 +1036,10 @@
           <div><span>Selecionados</span><strong id="reactivation-preview-selected">0</strong></div>
           <div><span>Elegíveis na prévia</span><strong id="reactivation-preview-eligible">0</strong></div>
           <div><span>Bloqueados</span><strong id="reactivation-preview-blocked">0</strong></div>
+        </div>
+        <div class="reactivation-preview-recipients-block">
+          <span>Destinatários desta campanha</span>
+          <div id="reactivation-preview-recipients" class="reactivation-preview-recipients"></div>
         </div>
         <div class="reactivation-preview-message">
           <span>Exemplo da mensagem</span>
