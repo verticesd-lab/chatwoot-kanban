@@ -2,10 +2,10 @@
 
 CRM comercial visual conectado ao Chatwoot. A interface mantém as conversas, mensagens, contatos, agentes, times, caixas e etiquetas no Chatwoot, enquanto organiza a operação comercial em um pipeline independente.
 
-## Versão atual: V1.3.6 — reativação manual controlada
+## Versão atual: V1.3.6.6 — identidade canônica na reativação
 
 
-A V1.3.6 preserva as fundações anteriores e adiciona uma central de **Reativação** com seleção por etiquetas, inclusão manual de contatos existentes, templates editáveis, prévia obrigatória, fila persistente de envio, bloqueio de reativação única, auditoria e métricas de resposta. Consulte [CRM_V1.3.6_README.md](CRM_V1.3.6_README.md).
+A V1.3.6 preserva as fundações anteriores e adiciona uma central de **Reativação**. A V1.3.6.6 torna a proteção e a contabilização de respostas resilientes a contatos/conversas duplicados no Chatwoot, usando identidade canônica do telefone. Consulte [CRM_V1.3.6.6_README.md](CRM_V1.3.6.6_README.md).
 
 ### Base operacional preservada da V1.3.3
 
@@ -93,6 +93,10 @@ Os atributos comerciais continuam sendo gravados nas conversas do Chatwoot para 
 
 Arquivamento de leads por contato para impedir que conversas antigas ou paralelas de leads de teste/sem valor operacional retornem ao Pipeline. Consulte `CRM_V1.3.5_README.md`.
 
+
+## CRM V1.3.6.6
+
+Correção de identidade canônica para reativação única e rastreamento de respostas quando o mesmo WhatsApp aparece em contatos/conversas diferentes no Chatwoot. Consulte `CRM_V1.3.6.6_README.md`.
 
 ## CRM V1.3.6
 

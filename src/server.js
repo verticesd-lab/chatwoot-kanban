@@ -65,6 +65,7 @@ app.post("/api/integrations/chatwoot/reactivation-webhook", (req, res) => {
 
   const accountId = webhookAccountId(payload);
   const conversationId = webhookConversationId(payload);
+  const incomingIdentity = reactivation.webhookIdentity(payload);
   const repliedAt = reactivation.messageTimestampIso(payload);
   if (!accountId || !conversationId || !repliedAt) {
     return res.status(200).json({ ok: true, ignored: true, reason: "missing_identity_or_timestamp" });
@@ -78,8 +79,12 @@ app.post("/api/integrations/chatwoot/reactivation-webhook", (req, res) => {
   const changed = db.markReactivationReplyFromIncoming({
     organizationId: organization.id,
     conversationId,
+    contactId: incomingIdentity.contactId,
+    canonicalPhone: incomingIdentity.canonicalPhone,
     repliedAt,
     replyMessageId: payload.id ?? null,
+    replyConversationId: conversationId,
+    replyContactId: incomingIdentity.contactId,
   });
 
   if (changed) {
@@ -91,6 +96,8 @@ app.post("/api/integrations/chatwoot/reactivation-webhook", (req, res) => {
       metadata: {
         repliedAt,
         replyMessageId: payload.id ?? null,
+        replyConversationId: conversationId,
+        replyContactId: incomingIdentity.contactId,
         deliveryId: String(req.headers["x-chatwoot-delivery"] || "").slice(0, 160) || null,
       },
     });
@@ -323,10 +330,12 @@ function reactivationProtectionReason(session, conversation, options = {}) {
   if (reactivation.hasBlockLabel(conversation, REACTIVATION_CONFIG.blockLabel)) {
     return `Etiqueta de proteção “${REACTIVATION_CONFIG.blockLabel}” já aplicada`;
   }
+  const identity = reactivation.conversationIdentity(conversation);
   const protectionStatus = db.getReactivationProtectionStatus(
     session.organization_id,
     Number(conversation.id),
-    options.excludeRecipientId || null
+    options.excludeRecipientId || null,
+    identity
   );
   if (protectionStatus === "sent") return "Reativação única já enviada anteriormente";
   if (["queued", "processing"].includes(protectionStatus)) return "Lead já está em uma campanha de reativação em andamento";
@@ -477,56 +486,106 @@ async function syncReactivationReplies(session, conversations = null) {
   const pending = db.listPendingReactivationReplyChecks(session.organization_id);
   if (!pending.length) return 0;
 
-  // The Chatwoot conversation collection is enough for cards/labels, but it does not
-  // reliably contain the message thread required to prove that the customer replied.
-  // For pending reactivations, read the message endpoint of the exact conversation.
-  const byId = Array.isArray(conversations)
-    ? new Map(conversations.map((conversation) => [Number(conversation.id), conversation]))
-    : new Map();
-
-  let updated = 0;
-  for (const recipient of pending) {
-    const conversationId = Number(recipient.conversationId);
-    let conversation = byId.get(conversationId) || { id: conversationId };
-
+  let allConversations = Array.isArray(conversations) ? conversations : null;
+  if (!allConversations) {
     try {
-      const fetched = await fetchConversationMessages(session, conversationId);
-      if (fetched.response.status < 200 || fetched.response.status >= 300) {
-        db.logAudit({
-          organizationId: session.organization_id,
-          action: "reactivation.reply_sync.failed",
-          entityType: "conversation",
-          entityId: conversationId,
-          metadata: {
-            campaignId: recipient.campaignId,
-            recipientId: recipient.id,
-            httpStatus: fetched.response.status,
-          },
-        });
-        continue;
-      }
-      conversation = { ...conversation, messages: fetched.messages };
+      allConversations = await fetchAllChatwootConversations(session);
     } catch (error) {
       db.logAudit({
         organizationId: session.organization_id,
         action: "reactivation.reply_sync.failed",
-        entityType: "conversation",
-        entityId: conversationId,
-        metadata: {
-          campaignId: recipient.campaignId,
-          recipientId: recipient.id,
-          error: String(error.message || "Falha ao consultar mensagens").slice(0, 240),
-        },
+        entityType: "organization",
+        entityId: session.organization_id,
+        metadata: { error: String(error.message || "Falha ao listar conversas").slice(0, 240) },
       });
-      continue;
+      allConversations = [];
+    }
+  }
+
+  const conversationById = new Map(
+    allConversations.map((conversation) => [Number(conversation.id), conversation])
+  );
+  const messageCache = new Map();
+  let updated = 0;
+
+  for (const recipient of pending) {
+    const candidateConversations = [];
+    const seenIds = new Set();
+
+    const original = conversationById.get(Number(recipient.conversationId));
+    if (original) {
+      candidateConversations.push(original);
+      seenIds.add(Number(original.id));
     }
 
-    const repliedAt = reactivation.latestIncomingAfter(conversation, recipient.sentAt);
-    if (!repliedAt) continue;
-    const changed = db.markReactivationReply({
+    for (const conversation of allConversations) {
+      const id = Number(conversation.id);
+      if (seenIds.has(id)) continue;
+      if (reactivation.recipientMatchesConversation(recipient, conversation)) {
+        candidateConversations.push(conversation);
+        seenIds.add(id);
+      }
+    }
+
+    // Preserve exact-conversation fallback even if the conversation collection did
+    // not return the original item.
+    if (!seenIds.has(Number(recipient.conversationId))) {
+      candidateConversations.push({ id: Number(recipient.conversationId) });
+    }
+
+    let firstReply = null;
+    for (const candidate of candidateConversations) {
+      const conversationId = Number(candidate.id);
+      if (!conversationId) continue;
+
+      let fetched = messageCache.get(conversationId);
+      if (!fetched) {
+        try {
+          fetched = await fetchConversationMessages(session, conversationId);
+          messageCache.set(conversationId, fetched);
+        } catch (error) {
+          db.logAudit({
+            organizationId: session.organization_id,
+            action: "reactivation.reply_sync.failed",
+            entityType: "conversation",
+            entityId: conversationId,
+            metadata: {
+              campaignId: recipient.campaignId,
+              recipientId: recipient.id,
+              error: String(error.message || "Falha ao consultar mensagens").slice(0, 240),
+            },
+          });
+          continue;
+        }
+      }
+
+      if (fetched.response.status < 200 || fetched.response.status >= 300) continue;
+      const reply = reactivation.firstIncomingMessageAfter(
+        { ...candidate, messages: fetched.messages },
+        recipient.sentAt
+      );
+      if (!reply) continue;
+      if (!firstReply || reply.timestamp < firstReply.timestamp) {
+        const replyIdentity = reactivation.conversationIdentity(candidate);
+        firstReply = {
+          ...reply,
+          conversationId,
+          contactId: replyIdentity.contactId,
+          canonicalPhone: replyIdentity.canonicalPhone,
+        };
+      }
+    }
+
+    if (!firstReply) continue;
+    const changed = db.markReactivationReplyFromIncoming({
       organizationId: session.organization_id,
-      conversationId,
-      repliedAt,
+      conversationId: firstReply.conversationId,
+      contactId: firstReply.contactId,
+      canonicalPhone: firstReply.canonicalPhone || recipient.canonicalPhone,
+      repliedAt: firstReply.repliedAt,
+      replyMessageId: firstReply.replyMessageId,
+      replyConversationId: firstReply.conversationId,
+      replyContactId: firstReply.contactId,
     });
     if (changed) {
       updated += changed;
@@ -534,8 +593,13 @@ async function syncReactivationReplies(session, conversations = null) {
         organizationId: session.organization_id,
         action: "reactivation.customer.replied",
         entityType: "conversation",
-        entityId: conversationId,
-        metadata: { repliedAt },
+        entityId: firstReply.conversationId,
+        metadata: {
+          repliedAt: firstReply.repliedAt,
+          replyMessageId: firstReply.replyMessageId,
+          originConversationId: recipient.conversationId,
+          replyConversationId: firstReply.conversationId,
+        },
       });
     }
   }
@@ -734,7 +798,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     app: "chatwoot-crm-kanban",
-    version: "1.3.6.5-reactivation-webhook-reply-tracking",
+    version: "1.3.6.6-reactivation-canonical-contact-identity",
     database: "sqlite-central",
   });
 });
@@ -1188,6 +1252,7 @@ app.post(
       const conversations = await fetchScopedActiveConversations(req.crmSession);
       const byId = new Map(conversations.map((conversation) => [Number(conversation.id), conversation]));
       const recipients = [];
+      const queuedIdentityKeys = new Set();
       for (const selection of selections) {
         const conversation = byId.get(selection.conversationId);
         if (!conversation) {
@@ -1211,11 +1276,21 @@ app.post(
         if (!blockReason && selection.sourceType !== "manual" && !snapshot.matchedLabels.length) {
           blockReason = "Lead não possui uma das etiquetas elegíveis";
         }
+        const identityKey = reactivation.identityKey({
+          canonicalPhone: snapshot.canonicalPhone,
+          contactId: snapshot.contactId,
+          conversationId: snapshot.conversationId,
+        });
+        if (!blockReason && identityKey && queuedIdentityKeys.has(identityKey)) {
+          blockReason = "Mesmo contato já foi incluído nesta campanha por outra conversa";
+        }
+        if (!blockReason && identityKey) queuedIdentityKeys.add(identityKey);
         recipients.push({
           conversationId: snapshot.conversationId,
           contactId: snapshot.contactId,
           contactName: snapshot.contactName,
           phone: snapshot.phone,
+          canonicalPhone: snapshot.canonicalPhone,
           sourceType: selection.sourceType,
           sourceReason: selection.sourceReason || null,
           sourceLabels: snapshot.matchedLabels,

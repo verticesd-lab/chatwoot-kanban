@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
+const contactIdentity = require("./contact-identity");
 
 const DEFAULT_STAGES = [
   { id: "new", label: "Novo lead", color: "#2563eb", archived: false, locked: true, terminal: false },
@@ -403,6 +404,7 @@ function createDatabase() {
       contact_id INTEGER,
       contact_name TEXT NOT NULL,
       phone TEXT,
+      canonical_phone TEXT,
       source_type TEXT NOT NULL DEFAULT 'tag' CHECK (source_type IN ('tag','manual')),
       source_reason TEXT,
       source_labels_json TEXT NOT NULL DEFAULT '[]',
@@ -417,6 +419,8 @@ function createDatabase() {
       sent_at TEXT,
       failed_at TEXT,
       replied_at TEXT,
+      reply_conversation_id INTEGER,
+      reply_contact_id INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE (campaign_id, conversation_id),
@@ -444,6 +448,25 @@ function createDatabase() {
   ensureColumn(db, "archived_opportunities", "contact_key", "TEXT");
   ensureColumn(db, "reactivation_recipients", "source_reason", "TEXT");
   ensureColumn(db, "reactivation_recipients", "reply_message_id", "TEXT");
+  ensureColumn(db, "reactivation_recipients", "canonical_phone", "TEXT");
+  ensureColumn(db, "reactivation_recipients", "reply_conversation_id", "INTEGER");
+  ensureColumn(db, "reactivation_recipients", "reply_contact_id", "INTEGER");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_reactivation_recipients_org_phone
+    ON reactivation_recipients(organization_id, canonical_phone, status);
+  `);
+
+  const missingCanonicalPhones = db.prepare(`
+    SELECT id, phone FROM reactivation_recipients
+    WHERE (canonical_phone IS NULL OR canonical_phone = '') AND phone IS NOT NULL AND phone <> ''
+  `).all();
+  const updateCanonicalPhone = db.prepare(`
+    UPDATE reactivation_recipients SET canonical_phone = ? WHERE id = ?
+  `);
+  for (const row of missingCanonicalPhones) {
+    const canonicalPhone = contactIdentity.canonicalPhone(row.phone);
+    if (canonicalPhone) updateCanonicalPhone.run(canonicalPhone, row.id);
+  }
 
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
   ensureColumn(db, "memberships", "chatwoot_agent_id", "INTEGER");
@@ -1760,6 +1783,7 @@ function reactivationRecipientRow(row) {
     contactId: row.contact_id ? Number(row.contact_id) : null,
     contactName: row.contact_name,
     phone: row.phone || "",
+    canonicalPhone: row.canonical_phone || contactIdentity.canonicalPhone(row.phone),
     sourceType: row.source_type,
     sourceReason: row.source_reason || null,
     sourceLabels: safeJsonParse(row.source_labels_json, []),
@@ -1774,6 +1798,9 @@ function reactivationRecipientRow(row) {
     sentAt: row.sent_at || null,
     failedAt: row.failed_at || null,
     repliedAt: row.replied_at || null,
+    replyMessageId: row.reply_message_id || null,
+    replyConversationId: row.reply_conversation_id ? Number(row.reply_conversation_id) : null,
+    replyContactId: row.reply_contact_id ? Number(row.reply_contact_id) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1843,10 +1870,10 @@ function createReactivationCampaign({
     );
     const insert = db.prepare(`
       INSERT INTO reactivation_recipients
-      (id, campaign_id, organization_id, conversation_id, contact_id, contact_name, phone,
+      (id, campaign_id, organization_id, conversation_id, contact_id, contact_name, phone, canonical_phone,
        source_type, source_reason, source_labels_json, message_rendered, status, block_reason,
        attempts, queued_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     `);
     for (const recipient of normalizedRecipients) {
       insert.run(
@@ -1857,6 +1884,7 @@ function createReactivationCampaign({
         recipient.contactId ? Number(recipient.contactId) : null,
         String(recipient.contactName || `Contato #${recipient.conversationId}`).slice(0, 120),
         String(recipient.phone || "").slice(0, 80) || null,
+        contactIdentity.canonicalPhone(recipient.canonicalPhone || recipient.phone) || null,
         recipient.sourceType === "manual" ? "manual" : "tag",
         recipient.sourceType === "manual" && recipient.sourceReason
           ? String(recipient.sourceReason).trim().slice(0, 160)
@@ -1964,31 +1992,62 @@ function listReactivationRecipients(organizationId, campaignId) {
   `).all(organizationId, campaignId).map(reactivationRecipientRow);
 }
 
-function hasPriorSuccessfulReactivation(organizationId, conversationId) {
+function reactivationIdentitySql({ conversationId, contactId = null, canonicalPhone = "" }) {
+  const normalizedConversationId = Number(conversationId || 0);
+  const normalizedContactId = Number(contactId || 0);
+  const normalizedPhone = contactIdentity.canonicalPhone(canonicalPhone);
+  return {
+    conversationId: Number.isInteger(normalizedConversationId) && normalizedConversationId > 0 ? normalizedConversationId : 0,
+    contactId: Number.isInteger(normalizedContactId) && normalizedContactId > 0 ? normalizedContactId : null,
+    canonicalPhone: normalizedPhone,
+  };
+}
+
+function hasPriorSuccessfulReactivation(organizationId, conversationId, identity = {}) {
+  const target = reactivationIdentitySql({ conversationId, ...identity });
   const row = db.prepare(`
     SELECT id FROM reactivation_recipients
-    WHERE organization_id = ? AND conversation_id = ? AND status = 'sent'
+    WHERE organization_id = ? AND status = 'sent'
+      AND (
+        conversation_id = ?
+        OR (? IS NOT NULL AND contact_id = ?)
+        OR (? <> '' AND canonical_phone = ?)
+      )
+    ORDER BY sent_at DESC, created_at DESC
     LIMIT 1
-  `).get(organizationId, Number(conversationId));
+  `).get(
+    organizationId,
+    target.conversationId,
+    target.contactId, target.contactId,
+    target.canonicalPhone, target.canonicalPhone
+  );
   return Boolean(row);
 }
 
-function getReactivationProtectionStatus(organizationId, conversationId, excludeRecipientId = null) {
-  const row = excludeRecipientId
-    ? db.prepare(`
-        SELECT status FROM reactivation_recipients
-        WHERE organization_id = ? AND conversation_id = ? AND id <> ?
-          AND status IN ('queued','processing','sent','uncertain')
-        ORDER BY created_at DESC
-        LIMIT 1
-      `).get(organizationId, Number(conversationId), excludeRecipientId)
-    : db.prepare(`
-        SELECT status FROM reactivation_recipients
-        WHERE organization_id = ? AND conversation_id = ?
-          AND status IN ('queued','processing','sent','uncertain')
-        ORDER BY created_at DESC
-        LIMIT 1
-      `).get(organizationId, Number(conversationId));
+function getReactivationProtectionStatus(organizationId, conversationId, excludeRecipientId = null, identity = {}) {
+  const target = reactivationIdentitySql({ conversationId, ...identity });
+  const params = [
+    organizationId,
+    target.conversationId,
+    target.contactId, target.contactId,
+    target.canonicalPhone, target.canonicalPhone,
+  ];
+  let sql = `
+    SELECT status FROM reactivation_recipients
+    WHERE organization_id = ?
+      AND (
+        conversation_id = ?
+        OR (? IS NOT NULL AND contact_id = ?)
+        OR (? <> '' AND canonical_phone = ?)
+      )
+      AND status IN ('queued','processing','sent','uncertain')
+  `;
+  if (excludeRecipientId) {
+    sql += ` AND id <> ?`;
+    params.push(excludeRecipientId);
+  }
+  sql += ` ORDER BY created_at DESC LIMIT 1`;
+  const row = db.prepare(sql).get(...params);
   return row?.status || null;
 }
 
@@ -2048,53 +2107,78 @@ function markReactivationRecipientTerminal({ recipientId, status, reason = null 
   return reactivationRecipientRow(db.prepare("SELECT * FROM reactivation_recipients WHERE id = ?").get(recipientId));
 }
 
-function markReactivationReply({ organizationId, conversationId, repliedAt }) {
-  const rows = db.prepare(`
-    SELECT id, campaign_id FROM reactivation_recipients
-    WHERE organization_id = ? AND conversation_id = ? AND status = 'sent' AND replied_at IS NULL
-  `).all(organizationId, Number(conversationId));
-  if (!rows.length) return 0;
-  const now = nowIso();
-  const update = db.prepare(`
-    UPDATE reactivation_recipients SET replied_at = ?, updated_at = ?
-    WHERE id = ? AND replied_at IS NULL
-  `);
-  let changed = 0;
-  for (const row of rows) {
-    const result = update.run(repliedAt || now, now, row.id);
-    changed += Number(result.changes || 0);
-    if (result.changes) refreshReactivationCampaignStatus(row.campaign_id);
-  }
-  return changed;
+function markReactivationReply({ organizationId, conversationId, repliedAt, contactId = null, canonicalPhone = "", replyMessageId = null, replyConversationId = null, replyContactId = null }) {
+  return markReactivationReplyFromIncoming({
+    organizationId,
+    conversationId,
+    contactId,
+    canonicalPhone,
+    repliedAt,
+    replyMessageId,
+    replyConversationId: replyConversationId || conversationId,
+    replyContactId,
+  });
 }
 
-
-function markReactivationReplyFromIncoming({ organizationId, conversationId, repliedAt, replyMessageId = null }) {
+function markReactivationReplyFromIncoming({
+  organizationId,
+  conversationId,
+  contactId = null,
+  canonicalPhone = "",
+  repliedAt,
+  replyMessageId = null,
+  replyConversationId = null,
+  replyContactId = null,
+}) {
   const replyIso = String(repliedAt || "").trim();
   if (!replyIso) return 0;
-  const rows = db.prepare(`
+  const target = reactivationIdentitySql({ conversationId, contactId, canonicalPhone });
+  if (!target.conversationId && !target.contactId && !target.canonicalPhone) return 0;
+
+  // Attribute the response to the most recent eligible reactivation of this
+  // canonical identity. This prevents duplicate legacy contacts from inflating
+  // response metrics while still allowing conversation/contact IDs to change.
+  const row = db.prepare(`
     SELECT id, campaign_id FROM reactivation_recipients
     WHERE organization_id = ?
-      AND conversation_id = ?
       AND status = 'sent'
       AND sent_at IS NOT NULL
       AND sent_at < ?
       AND replied_at IS NULL
-  `).all(organizationId, Number(conversationId), replyIso);
-  if (!rows.length) return 0;
+      AND (
+        conversation_id = ?
+        OR (? IS NOT NULL AND contact_id = ?)
+        OR (? <> '' AND canonical_phone = ?)
+      )
+    ORDER BY sent_at DESC, created_at DESC
+    LIMIT 1
+  `).get(
+    organizationId, replyIso,
+    target.conversationId,
+    target.contactId, target.contactId,
+    target.canonicalPhone, target.canonicalPhone
+  );
+  if (!row) return 0;
+
   const now = nowIso();
-  const update = db.prepare(`
+  const result = db.prepare(`
     UPDATE reactivation_recipients
-    SET replied_at = ?, reply_message_id = ?, updated_at = ?
+    SET replied_at = ?,
+        reply_message_id = ?,
+        reply_conversation_id = ?,
+        reply_contact_id = ?,
+        updated_at = ?
     WHERE id = ? AND replied_at IS NULL
-  `);
-  let changed = 0;
-  for (const row of rows) {
-    const result = update.run(replyIso, replyMessageId == null ? null : String(replyMessageId), now, row.id);
-    changed += Number(result.changes || 0);
-    if (result.changes) refreshReactivationCampaignStatus(row.campaign_id);
-  }
-  return changed;
+  `).run(
+    replyIso,
+    replyMessageId == null ? null : String(replyMessageId),
+    Number(replyConversationId || conversationId || 0) || null,
+    Number(replyContactId || contactId || 0) || null,
+    now,
+    row.id
+  );
+  if (result.changes) refreshReactivationCampaignStatus(row.campaign_id);
+  return Number(result.changes || 0);
 }
 
 function getOrganizationByChatwootAccountId(accountId) {

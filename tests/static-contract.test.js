@@ -108,5 +108,9 @@ assert(server.includes('/api/integrations/chatwoot/reactivation-webhook'), 'webh
 assert(server.includes('x-chatwoot-signature'), 'webhook deve validar assinatura do Chatwoot');
 assert(server.includes('timingSafeEqual'), 'assinatura deve usar comparação constante');
 assert(server.includes('reactivation.customer.replied.webhook'), 'resposta via webhook deve gerar auditoria');
+assert(server.includes('canonicalPhone: incomingIdentity.canonicalPhone'), 'webhook deve correlacionar por telefone canônico');
+assert(server.includes('recipientMatchesConversation'), 'fallback deve localizar conversas da mesma identidade');
+assert(server.includes('replyConversationId'), 'auditoria deve preservar conversa de resposta');
+assert(fs.existsSync(path.join(root, 'src', 'contact-identity.js')), 'módulo de identidade canônica deve existir');
 
-console.log("CRM V1.3.6.5 static UI/API contract tests: OK");
+console.log("CRM V1.3.6.6 static UI/API contract tests: OK");

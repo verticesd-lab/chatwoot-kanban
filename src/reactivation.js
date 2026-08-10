@@ -1,3 +1,5 @@
+const contactIdentity = require("./contact-identity");
+
 const DEFAULT_ELIGIBLE_LABELS = [
   "aguardando-cpf-terceiro",
   "fora-de-horario",
@@ -122,7 +124,7 @@ function matchesPeriod(conversation, period) {
 }
 
 function senderForConversation(conversation) {
-  return conversation?.meta?.sender || conversation?.sender || {};
+  return contactIdentity.senderFromConversation(conversation);
 }
 
 function firstName(value) {
@@ -193,6 +195,28 @@ function messageTimestampIso(message) {
   return timestamp ? new Date(timestamp).toISOString() : null;
 }
 
+function firstIncomingMessageAfter(conversation, isoTimestamp) {
+  const since = getTimestamp(isoTimestamp);
+  if (!since) return null;
+  const candidates = [];
+  if (conversation?.last_non_activity_message) candidates.push(conversation.last_non_activity_message);
+  if (Array.isArray(conversation?.messages)) candidates.push(...conversation.messages);
+  let first = null;
+  for (const message of candidates) {
+    if (!message || !isIncomingMessage(message) || message.private === true) continue;
+    const timestamp = getTimestamp(message.created_at) || getTimestamp(message.updated_at) || 0;
+    if (timestamp <= since) continue;
+    if (!first || timestamp < first.timestamp) {
+      first = {
+        timestamp,
+        repliedAt: new Date(timestamp).toISOString(),
+        replyMessageId: message.id == null ? null : String(message.id),
+      };
+    }
+  }
+  return first;
+}
+
 function latestIncomingAfter(conversation, isoTimestamp) {
   const since = getTimestamp(isoTimestamp);
   if (!since) return null;
@@ -213,6 +237,7 @@ function latestIncomingAfter(conversation, isoTimestamp) {
 
 function candidateSnapshot(conversation, config, options = {}) {
   const sender = senderForConversation(conversation);
+  const identity = contactIdentity.conversationIdentity(conversation);
   const labels = conversationLabels(conversation);
   const matchedLabels = matchingEligibilityLabels(conversation, options.selectedLabels || config.eligibleLabels);
   return {
@@ -220,6 +245,7 @@ function candidateSnapshot(conversation, config, options = {}) {
     contactId: sender.id ? Number(sender.id) : null,
     contactName: String(sender.name || `Contato #${conversation.id}`).trim().slice(0, 120),
     phone: String(sender.phone_number || "").trim().slice(0, 80),
+    canonicalPhone: identity.canonicalPhone,
     email: String(sender.email || "").trim().slice(0, 160),
     labels,
     matchedLabels,
@@ -250,6 +276,12 @@ module.exports = {
   terminalStage,
   isIncomingMessage,
   messageTimestampIso,
+  firstIncomingMessageAfter,
   latestIncomingAfter,
+  canonicalPhone: contactIdentity.canonicalPhone,
+  conversationIdentity: contactIdentity.conversationIdentity,
+  webhookIdentity: contactIdentity.webhookIdentity,
+  identityKey: contactIdentity.identityKey,
+  recipientMatchesConversation: contactIdentity.recipientMatchesConversation,
   candidateSnapshot,
 };
