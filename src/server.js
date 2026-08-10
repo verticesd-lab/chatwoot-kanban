@@ -149,6 +149,19 @@ async function fetchConversation(session, conversationId) {
   };
 }
 
+async function fetchConversationMessages(session, conversationId) {
+  const response = await chatwootRequest(session, {
+    method: "GET",
+    url: `${session.chatwoot_base_url}/api/v1/accounts/${session.chatwoot_account_id}/conversations/${conversationId}/messages`,
+  });
+  return {
+    response,
+    messages: response.status >= 200 && response.status < 300
+      ? extractPayload(response.data)
+      : [],
+  };
+}
+
 async function requireConversationAccess(req, res, conversationId) {
   const fetched = await fetchConversation(req.crmSession, conversationId);
   if (!fetched.conversation) {
@@ -364,17 +377,56 @@ async function processNextReactivationRecipient() {
 async function syncReactivationReplies(session, conversations = null) {
   const pending = db.listPendingReactivationReplyChecks(session.organization_id);
   if (!pending.length) return 0;
-  const source = conversations || await fetchAllChatwootConversations(session);
-  const byId = new Map(source.map((conversation) => [Number(conversation.id), conversation]));
+
+  // The Chatwoot conversation collection is enough for cards/labels, but it does not
+  // reliably contain the message thread required to prove that the customer replied.
+  // For pending reactivations, read the message endpoint of the exact conversation.
+  const byId = Array.isArray(conversations)
+    ? new Map(conversations.map((conversation) => [Number(conversation.id), conversation]))
+    : new Map();
+
   let updated = 0;
   for (const recipient of pending) {
-    const conversation = byId.get(Number(recipient.conversationId));
-    if (!conversation) continue;
+    const conversationId = Number(recipient.conversationId);
+    let conversation = byId.get(conversationId) || { id: conversationId };
+
+    try {
+      const fetched = await fetchConversationMessages(session, conversationId);
+      if (fetched.response.status < 200 || fetched.response.status >= 300) {
+        db.logAudit({
+          organizationId: session.organization_id,
+          action: "reactivation.reply_sync.failed",
+          entityType: "conversation",
+          entityId: conversationId,
+          metadata: {
+            campaignId: recipient.campaignId,
+            recipientId: recipient.id,
+            httpStatus: fetched.response.status,
+          },
+        });
+        continue;
+      }
+      conversation = { ...conversation, messages: fetched.messages };
+    } catch (error) {
+      db.logAudit({
+        organizationId: session.organization_id,
+        action: "reactivation.reply_sync.failed",
+        entityType: "conversation",
+        entityId: conversationId,
+        metadata: {
+          campaignId: recipient.campaignId,
+          recipientId: recipient.id,
+          error: String(error.message || "Falha ao consultar mensagens").slice(0, 240),
+        },
+      });
+      continue;
+    }
+
     const repliedAt = reactivation.latestIncomingAfter(conversation, recipient.sentAt);
     if (!repliedAt) continue;
     const changed = db.markReactivationReply({
       organizationId: session.organization_id,
-      conversationId: recipient.conversationId,
+      conversationId,
       repliedAt,
     });
     if (changed) {
@@ -383,7 +435,7 @@ async function syncReactivationReplies(session, conversations = null) {
         organizationId: session.organization_id,
         action: "reactivation.customer.replied",
         entityType: "conversation",
-        entityId: recipient.conversationId,
+        entityId: conversationId,
         metadata: { repliedAt },
       });
     }

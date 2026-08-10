@@ -80,6 +80,9 @@ assert(server.includes("validateManualSourceReason"));
 assert(styles.includes("CRM V1.3.6.3 — inclusão manual auditável"));
 assert(server.includes('require("./reactivation")'));
 assert(server.includes("REACTIVATION_SEND_ENABLED"));
+assert(server.includes("async function fetchConversationMessages"));
+assert(server.includes("/conversations/${conversationId}/messages"));
+assert(server.includes('action: "reactivation.reply_sync.failed"'));
 assert(html.includes('value="aguardando-cpf-terceiro"'));
 assert(html.includes('value="fora-de-horario"'));
 assert(html.includes('value="aguardando-retorno-cliente"'));
@@ -100,4 +103,4 @@ assert(html.includes('id="archive-scope-hint"'));
 assert(suppression.includes('"lead de teste"'));
 assert(suppression.includes('"sem valor operacional"'));
 
-console.log("CRM V1.3.6.3 static UI/API contract tests: OK");
+console.log("CRM V1.3.6.4 static UI/API contract tests: OK");

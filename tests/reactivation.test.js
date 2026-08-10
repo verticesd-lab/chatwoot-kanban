@@ -72,6 +72,22 @@ const incomingConversation = {
 };
 assert(reactivation.latestIncomingAfter(incomingConversation, new Date(Date.now() - 5000).toISOString()));
 
+const incomingMessagesPayload = {
+  messages: [
+    {
+      message_type: 0,
+      created_at: Math.floor(Date.now() / 1000),
+    },
+  ],
+};
+assert(
+  reactivation.latestIncomingAfter(
+    incomingMessagesPayload,
+    new Date(Date.now() - 5000).toISOString()
+  ),
+  "resposta incoming obtida pelo endpoint /messages deve ser reconhecida"
+);
+
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-reactivation-test-"));
 process.env.CRM_DB_PATH = path.join(tempDir, "crm.sqlite");
 process.env.CRM_ENCRYPTION_KEY = "chave-de-teste-com-mais-de-24-caracteres";
@@ -159,4 +175,4 @@ try {
   fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
-console.log("CRM V1.3.6.3 reactivation manual audit tests: OK");
+console.log("CRM V1.3.6.4 reactivation reply-sync tests: OK");
