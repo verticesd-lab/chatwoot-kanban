@@ -9,6 +9,7 @@ const db = require("./db");
 const access = require("./access-control");
 const suppression = require("./contact-suppression");
 const reactivation = require("./reactivation");
+const reactivationScope = require("./reactivation-scope");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -309,9 +310,10 @@ async function fetchAllChatwootConversations(session) {
 }
 
 
-async function fetchScopedActiveConversations(session) {
+async function fetchReactivationActiveConversations(session) {
   const allConversations = await fetchAllChatwootConversations(session);
-  const scopedConversations = access.filterConversationsForSession(session, allConversations);
+  const scopedConversations = reactivationScope
+    .filterConversationsForReactivation(session, allConversations);
   const archivedItems = db.listArchivedOpportunities(session.organization_id);
   const archivedByConversation = new Map(
     archivedItems.map((item) => [Number(item.conversationId), item])
@@ -1119,7 +1121,10 @@ app.get(
         ? String(req.query.period)
         : "7d";
       const search = String(req.query.search || "").trim().toLocaleLowerCase("pt-BR").slice(0, 120);
-      const conversations = await fetchScopedActiveConversations(req.crmSession);
+      const conversations = await fetchReactivationActiveConversations(req.crmSession);
+      const manualCandidates = conversations
+        .map((conversation) => reactivation.candidateSnapshot(conversation, REACTIVATION_CONFIG))
+        .sort((a, b) => String(b.lastActivityAt || "").localeCompare(String(a.lastActivityAt || "")));
       const matched = [];
       for (const conversation of conversations) {
         if (!reactivation.matchesPeriod(conversation, period)) continue;
@@ -1159,6 +1164,7 @@ app.get(
         eligibleCount: eligible.length,
         blockedCount: matched.length - eligible.length,
         candidates: matched,
+        manualCandidates,
       });
     } catch (error) {
       console.error("Erro ao carregar candidatos à reativação:", error.message);
@@ -1249,7 +1255,7 @@ app.post(
         });
       }
 
-      const conversations = await fetchScopedActiveConversations(req.crmSession);
+      const conversations = await fetchReactivationActiveConversations(req.crmSession);
       const byId = new Map(conversations.map((conversation) => [Number(conversation.id), conversation]));
       const recipients = [];
       const queuedIdentityKeys = new Set();

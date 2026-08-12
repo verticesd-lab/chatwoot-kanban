@@ -8,6 +8,7 @@ const script = fs.readFileSync(path.join(root, "src", "script.js"), "utf8");
 const server = fs.readFileSync(path.join(root, "src", "server.js"), "utf8");
 const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 const suppression = fs.readFileSync(path.join(root, "src", "contact-suppression.js"), "utf8");
+const reactivationScope = fs.readFileSync(path.join(root, "src", "reactivation-scope.js"), "utf8");
 
 const htmlIds = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
 const duplicateIds = htmlIds.filter((id, index) => htmlIds.indexOf(id) !== index);
@@ -79,6 +80,15 @@ assert(script.includes('"Remover"'));
 assert(server.includes("validateManualSourceReason"));
 assert(styles.includes("CRM V1.3.6.3 — inclusão manual auditável"));
 assert(server.includes('require("./reactivation")'));
+assert(server.includes('require("./reactivation-scope")'));
+assert.strictEqual(
+  (server.match(/const conversations = await fetchReactivationActiveConversations\(req\.crmSession\);/g) || []).length,
+  2,
+  "listagem e criação da campanha devem compartilhar o escopo da Reativação"
+);
+assert(reactivationScope.includes('operationalRole(session) === "sdr"'));
+assert(script.includes("candidateResponse.manualCandidates"));
+assert(script.includes("(state.reactivation.manualCandidates || [])"));
 assert(server.includes("REACTIVATION_SEND_ENABLED"));
 assert(server.includes("async function fetchConversationMessages"));
 assert(server.includes("/conversations/${conversationId}/messages"));

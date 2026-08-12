@@ -85,6 +85,7 @@ const state = {
   reactivation: {
     configuration: null,
     candidates: [],
+    manualCandidates: [],
     campaigns: [],
     summary: { campaigns: 0, sent: 0, replied: 0, blocked: 0, failed: 0, uncertain: 0, responseRate: 0 },
     selected: new Map(),
@@ -4135,13 +4136,24 @@ function reactivationSelectionCandidate(conversationId) {
   ) || null;
 }
 
+function reactivationManualCandidate(conversationId) {
+  return (state.reactivation.manualCandidates || []).find(
+    (item) => Number(item.conversationId) === Number(conversationId)
+  ) || null;
+}
+
 function reactivationSelectionPresentation(conversationId, selection) {
   const candidate = reactivationSelectionCandidate(conversationId);
+  const manualCandidate = reactivationManualCandidate(conversationId);
   const conversation = reactivationSelectionConversation(conversationId);
   const sender = getSender(conversation);
-  const name = candidate?.contactName || sender.name || `Contato #${conversationId}`;
-  const phone = candidate?.phone || sender.phone_number || sender.email || "";
-  const matchedLabels = Array.isArray(candidate?.matchedLabels) ? candidate.matchedLabels : [];
+  const name = candidate?.contactName || manualCandidate?.contactName || sender.name || `Contato #${conversationId}`;
+  const phone = candidate?.phone || manualCandidate?.phone || manualCandidate?.email || sender.phone_number || sender.email || "";
+  const matchedLabels = Array.isArray(candidate?.matchedLabels)
+    ? candidate.matchedLabels
+    : Array.isArray(manualCandidate?.matchedLabels)
+      ? manualCandidate.matchedLabels
+      : [];
   const sourceType = selection?.sourceType === "manual" ? "manual" : "tag";
   const sourceReason = sourceType === "manual" ? String(selection?.sourceReason || "").trim() : "";
   return { name, phone, matchedLabels, sourceType, sourceReason };
@@ -4202,20 +4214,14 @@ function reactivationDisplayCandidates() {
     const id = Number(conversationId);
     if (selection?.sourceType !== "manual" || existingIds.has(id)) continue;
 
-    const conversation = state.conversations.find((item) => Number(item.id) === id);
-    if (!conversation) continue;
-    const sender = getSender(conversation);
+    const candidate = reactivationManualCandidate(id);
+    if (!candidate) continue;
     manualCandidates.push({
-      conversationId: id,
-      contactName: sender.name || `Contato #${id}`,
-      phone: sender.phone_number || "",
-      email: sender.email || "",
-      matchedLabels: [],
-      lastActivityAt: conversation.last_activity_at || conversation.updated_at || conversation.created_at || null,
-      eligible: !clientHasReactivationBlock(conversation) && !clientReactivationTerminal(conversation),
-      blockReason: clientHasReactivationBlock(conversation)
+      ...candidate,
+      eligible: !candidate.hasBlockLabel && !candidate.terminal,
+      blockReason: candidate.hasBlockLabel
         ? "Etiqueta de proteção 'reativacao-unica-enviada' já aplicada"
-        : clientReactivationTerminal(conversation)
+        : candidate.terminal
           ? "Conversa encerrada, ganha ou perdida"
           : null,
       sourceType: "manual",
@@ -4497,6 +4503,9 @@ async function loadReactivationCenter(options = {}) {
     ]);
     state.reactivation.configuration = candidateResponse.configuration || state.reactivation.configuration;
     state.reactivation.candidates = Array.isArray(candidateResponse.candidates) ? candidateResponse.candidates : [];
+    state.reactivation.manualCandidates = Array.isArray(candidateResponse.manualCandidates)
+      ? candidateResponse.manualCandidates
+      : [];
     state.reactivation.serverEligibleCount = Number(candidateResponse.eligibleCount || 0);
     state.reactivation.campaigns = Array.isArray(campaignResponse.campaigns) ? campaignResponse.campaigns : [];
     state.reactivation.summary = campaignResponse.summary || state.reactivation.summary;
@@ -4585,11 +4594,10 @@ function renderReactivationManualSelected() {
 function renderReactivationManualResults() {
   if (!elements.reactivationManualResults) return;
   const query = safeLower(elements.reactivationManualSearch?.value || "");
-  const candidates = state.conversations
-    .filter((conversation) => {
-      if (clientReactivationTerminal(conversation)) return false;
-      const sender = getSender(conversation);
-      const haystack = [sender.name, sender.phone_number, sender.email, String(conversation.id)]
+  const candidates = (state.reactivation.manualCandidates || [])
+    .filter((candidate) => {
+      if (candidate.terminal) return false;
+      const haystack = [candidate.contactName, candidate.phone, candidate.email, String(candidate.conversationId)]
         .join(" ")
         .toLocaleLowerCase("pt-BR");
       return !query || haystack.includes(query);
@@ -4600,17 +4608,17 @@ function renderReactivationManualResults() {
     elements.reactivationManualResults.appendChild(createElement("div", "empty-state", "Nenhum contato ativo encontrado."));
     return;
   }
-  for (const conversation of candidates) {
-    const sender = getSender(conversation);
-    const blocked = clientHasReactivationBlock(conversation);
-    const selection = state.reactivation.selected.get(Number(conversation.id));
+  for (const candidate of candidates) {
+    const conversationId = Number(candidate.conversationId);
+    const blocked = Boolean(candidate.hasBlockLabel);
+    const selection = state.reactivation.selected.get(conversationId);
     const selectedByTag = selection?.sourceType === "tag";
     const selectedManually = selection?.sourceType === "manual";
     const row = createElement("div", `reactivation-manual-row${blocked ? " is-blocked" : ""}`);
     const info = createElement("div");
     info.append(
-      createElement("strong", null, sender.name || `Contato #${conversation.id}`),
-      createElement("span", null, sender.phone_number || sender.email || `Conversa #${conversation.id}`),
+      createElement("strong", null, candidate.contactName || `Contato #${conversationId}`),
+      createElement("span", null, candidate.phone || candidate.email || `Conversa #${conversationId}`),
       createElement(
         "small",
         null,
@@ -4620,14 +4628,14 @@ function renderReactivationManualResults() {
             ? `Incluído manualmente · ${selection.sourceReason || "motivo não informado"}`
             : selectedByTag
               ? "Já selecionado pela lista de etiquetas"
-              : `Conversa #${conversation.id}`
+              : `Conversa #${conversationId}`
       )
     );
     let button;
     if (selectedManually) {
       button = createElement("button", "button button-ghost button-small", "Remover");
       button.type = "button";
-      button.addEventListener("click", () => removeReactivationSelection(conversation.id));
+      button.addEventListener("click", () => removeReactivationSelection(conversationId));
     } else if (selectedByTag) {
       button = createElement("button", "button button-ghost button-small", "Selecionado por etiqueta");
       button.type = "button";
@@ -4643,7 +4651,7 @@ function renderReactivationManualResults() {
           elements.reactivationManualReason?.focus();
           return;
         }
-        state.reactivation.selected.set(Number(conversation.id), {
+        state.reactivation.selected.set(conversationId, {
           sourceType: "manual",
           sourceReason: reason,
         });
@@ -4739,8 +4747,14 @@ function openReactivationPreview() {
     const conversation = state.conversations.find(
       (item) => Number(item.id) === Number(selection.conversationId)
     );
+    const manualCandidate = reactivationManualCandidate(selection.conversationId);
     if (selection.sourceType === "tag" && candidate && !candidate.eligible) blocked += 1;
-    else if (clientHasReactivationBlock(conversation) || clientReactivationTerminal(conversation)) blocked += 1;
+    else if (
+      manualCandidate?.hasBlockLabel ||
+      manualCandidate?.terminal ||
+      clientHasReactivationBlock(conversation) ||
+      clientReactivationTerminal(conversation)
+    ) blocked += 1;
   }
   elements.reactivationPreviewSelected.textContent = String(selected.length);
   elements.reactivationPreviewBlocked.textContent = String(blocked);
