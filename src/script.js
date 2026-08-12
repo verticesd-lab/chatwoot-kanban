@@ -260,8 +260,20 @@ function belongsToCurrentScope(conversation) {
 
 function operationalStageIds() {
   const role = state.user?.operationalRole || state.user?.role;
-  if (role === "sdr") return new Set(["new", "contacted", "qualification"]);
-  if (role === "seller") return new Set(["proposal", "negotiation", "won", "lost"]);
+  if (role === "sdr") {
+    return new Set([
+      "new",
+      "contacted",
+      "qualification",
+      "sem_resposta_followup",
+      "nova_tentativa_cpf",
+      "analise_manual",
+      "credito_aprovado",
+    ]);
+  }
+  if (role === "seller") {
+    return new Set(["credito_aprovado", "proposal", "negotiation", "won", "lost"]);
+  }
   return new Set(getVisiblePipelineStages().map((stage) => stage.id));
 }
 
