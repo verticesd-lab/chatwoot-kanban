@@ -849,6 +849,25 @@ async function handleRequiredPasswordChange(event) {
   }
 }
 
+function openPasswordChangeModal() {
+  elements.accountPasswordForm.reset();
+  elements.accountPasswordResult.textContent = "";
+  elements.accountPasswordResult.classList.remove("is-success");
+  elements.passwordChangeModal.classList.add("is-open");
+  elements.passwordChangeModal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+  window.setTimeout(() => elements.accountCurrentPassword.focus(), 60);
+}
+
+function closePasswordChangeModal() {
+  elements.passwordChangeModal.classList.remove("is-open");
+  elements.passwordChangeModal.setAttribute("aria-hidden", "true");
+  elements.accountPasswordForm.reset();
+  elements.accountPasswordResult.textContent = "";
+  elements.accountPasswordResult.classList.remove("is-success");
+  document.body.style.overflow = "";
+}
+
 async function handleVoluntaryPasswordChange(event) {
   event.preventDefault();
   elements.accountPasswordResult.textContent = "";
@@ -866,9 +885,8 @@ async function handleVoluntaryPasswordChange(event) {
       }),
     });
     applySessionPayload(response);
-    elements.accountPasswordForm.reset();
-    elements.accountPasswordResult.textContent = "Senha alterada com sucesso.";
-    elements.accountPasswordResult.classList.add("is-success");
+    closePasswordChangeModal();
+    showToast("Senha alterada com sucesso.", "success");
   } catch (error) {
     elements.accountPasswordResult.textContent = error.message;
   } finally {
@@ -892,6 +910,7 @@ async function logout() {
     state.transferRequests = [];
     elements.requiredPasswordForm?.reset();
     elements.accountPasswordForm?.reset();
+    elements.passwordChangeModal?.classList.remove("is-open");
     showLogin();
   }
 }
@@ -5057,6 +5076,7 @@ function cacheElements() {
     accountNewPasswordConfirmation: byId("account-new-password-confirmation"),
     accountPasswordSubmit: byId("account-password-submit"),
     accountPasswordResult: byId("account-password-result"),
+    passwordChangeModal: byId("password-change-modal"),
     pageEyebrow: byId("page-eyebrow"),
     pageTitle: byId("page-title"),
     globalSearch: byId("global-search"),
@@ -5247,6 +5267,12 @@ function bindEvents() {
   elements.requiredPasswordForm.addEventListener("submit", handleRequiredPasswordChange);
   elements.requiredPasswordLogout.addEventListener("click", logout);
   elements.accountPasswordForm.addEventListener("submit", handleVoluntaryPasswordChange);
+  document.querySelectorAll("[data-open-password-change]").forEach((element) => {
+    element.addEventListener("click", openPasswordChangeModal);
+  });
+  document.querySelectorAll("[data-close-password-change]").forEach((element) => {
+    element.addEventListener("click", closePasswordChangeModal);
+  });
   elements.logoutButton.addEventListener("click", logout);
   elements.refreshButton.addEventListener("click", () => loadWorkspace({ background: false }));
   elements.refreshPresence?.addEventListener("click", () => refreshPresence({ silent: false }));
@@ -5477,7 +5503,9 @@ function bindEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (elements.reactivationPreviewModal?.classList.contains("is-open")) {
+    if (elements.passwordChangeModal?.classList.contains("is-open")) {
+      closePasswordChangeModal();
+    } else if (elements.reactivationPreviewModal?.classList.contains("is-open")) {
       closeReactivationPreviewModal();
     } else if (elements.reactivationManualModal?.classList.contains("is-open")) {
       closeReactivationManualModal();

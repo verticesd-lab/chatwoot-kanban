@@ -125,7 +125,10 @@ assert(server.includes('replyConversationId'), 'auditoria deve preservar convers
 assert(fs.existsSync(path.join(root, 'src', 'contact-identity.js')), 'módulo de identidade canônica deve existir');
 assert(html.includes("Crie sua nova senha"), "tela de troca obrigatória deve existir");
 assert(html.includes('id="account-password-form"'), "Minha conta deve permitir alterar senha");
+assert(html.includes('data-open-password-change'), "alteração de senha deve estar sempre visível");
+assert(html.includes('id="password-change-modal"'), "alteração voluntária deve abrir em modal próprio");
 assert(script.includes("function showPasswordChangeRequired()"), "frontend deve isolar a troca obrigatória");
+assert(script.includes("function openPasswordChangeModal()"), "frontend deve abrir a troca voluntária diretamente");
 assert(script.includes('body?.code === "PASSWORD_CHANGE_REQUIRED"'), "cliente HTTP deve tratar o bloqueio central");
 assert(server.includes("res.status(428)"), "backend deve bloquear APIs durante troca obrigatória");
 assert(server.includes('code: "PASSWORD_CHANGE_REQUIRED"'), "bloqueio deve possuir código estável");

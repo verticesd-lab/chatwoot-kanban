@@ -164,6 +164,10 @@
         <div class="sidebar-spacer"></div>
 
         <nav class="main-nav secondary-nav">
+          <button class="nav-item" type="button" data-open-password-change>
+            <span class="nav-icon">●</span>
+            Alterar senha
+          </button>
           <button class="nav-item" data-view="settings">
             <span class="nav-icon">⚙</span>
             Configurações
@@ -862,24 +866,9 @@
                 <div class="account-password-section">
                   <h3>Alterar senha</h3>
                   <p class="muted">Confirme sua senha atual antes de definir uma nova.</p>
-                  <form id="account-password-form" class="account-password-form">
-                    <label>
-                      Senha atual
-                      <input id="account-current-password" type="password" autocomplete="current-password" required />
-                    </label>
-                    <label>
-                      Nova senha
-                      <input id="account-new-password" type="password" minlength="10" autocomplete="new-password" required />
-                    </label>
-                    <label>
-                      Confirmar nova senha
-                      <input id="account-new-password-confirmation" type="password" minlength="10" autocomplete="new-password" required />
-                    </label>
-                    <button id="account-password-submit" class="button button-primary" type="submit">
-                      Alterar senha
-                    </button>
-                    <p id="account-password-result" class="form-error" role="status"></p>
-                  </form>
+                  <button class="button button-primary" type="button" data-open-password-change>
+                    Alterar minha senha
+                  </button>
                 </div>
                 <button id="logout-button" class="button button-danger">Sair da conta</button>
               </article>
@@ -1170,6 +1159,39 @@
         <div class="modal-actions">
           <button type="button" class="button button-ghost" data-close-transition>Cancelar</button>
           <button id="transition-confirm" type="submit" class="button button-primary">Confirmar</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="password-change-modal" class="modal" aria-hidden="true">
+      <div class="modal-backdrop" data-close-password-change></div>
+      <form id="account-password-form" class="modal-card account-password-form">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">MINHA CONTA</p>
+            <h2>Alterar senha</h2>
+            <p class="muted">Informe sua senha atual e escolha uma nova senha.</p>
+          </div>
+          <button type="button" class="icon-button" data-close-password-change aria-label="Fechar">×</button>
+        </div>
+        <label>
+          Senha atual
+          <input id="account-current-password" type="password" autocomplete="current-password" required />
+        </label>
+        <label>
+          Nova senha
+          <input id="account-new-password" type="password" minlength="10" autocomplete="new-password" required />
+        </label>
+        <label>
+          Confirmar nova senha
+          <input id="account-new-password-confirmation" type="password" minlength="10" autocomplete="new-password" required />
+        </label>
+        <p id="account-password-result" class="form-error" role="status"></p>
+        <div class="modal-actions">
+          <button type="button" class="button button-ghost" data-close-password-change>Cancelar</button>
+          <button id="account-password-submit" class="button button-primary" type="submit">
+            Alterar senha
+          </button>
         </div>
       </form>
     </div>
