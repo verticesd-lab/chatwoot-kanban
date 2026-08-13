@@ -188,6 +188,7 @@ function createDatabase() {
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -471,6 +472,7 @@ function createDatabase() {
   ensureColumn(db, "memberships", "operational_role", "TEXT NOT NULL DEFAULT 'agent'");
   ensureColumn(db, "memberships", "chatwoot_agent_id", "INTEGER");
   ensureColumn(db, "memberships", "visibility_scope", "TEXT NOT NULL DEFAULT 'all'");
+  ensureColumn(db, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0");
 
   db.exec(`
     UPDATE memberships
@@ -496,6 +498,7 @@ function createDatabase() {
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?)").run(nowIso());
   db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (5, ?)").run(nowIso());
+  db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (6, ?)").run(nowIso());
 
   return { db, databasePath };
 }
@@ -603,8 +606,9 @@ function bootstrapFromEnv(baseUrl) {
       now
     );
     db.prepare(`
-      INSERT INTO users (id, email, name, password_hash, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?)
+      INSERT INTO users
+      (id, email, name, password_hash, must_change_password, active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, 1, ?, ?)
     `).run(userId, adminEmail, adminName, hashPassword(adminPassword), now, now);
     db.prepare(`
       INSERT INTO memberships
@@ -659,6 +663,7 @@ function getSession(rawToken) {
   const session = db.prepare(`
     SELECT s.token_hash, s.created_at AS session_created_at, s.expires_at,
            u.id AS user_id, u.email, u.name AS user_name, u.active,
+           u.must_change_password,
            m.role, m.operational_role, m.chatwoot_agent_id, m.visibility_scope,
            o.id AS organization_id, o.name AS organization_name,
            o.slug AS organization_slug, o.chatwoot_account_id,
@@ -712,6 +717,7 @@ function sessionPayload(session) {
       operationalRole: session.operational_role,
       chatwootAgentId: session.chatwoot_agent_id ? Number(session.chatwoot_agent_id) : null,
       visibilityScope: session.visibility_scope,
+      mustChangePassword: Boolean(session.must_change_password),
     },
     permissions: session.permissions,
   };
@@ -832,7 +838,8 @@ function deleteFilterPreset({ organizationId, userId, filterId, canManageShared 
 
 function listUsers(organizationId) {
   return db.prepare(`
-    SELECT u.id, u.name, u.email, u.active, m.role, m.operational_role,
+    SELECT u.id, u.name, u.email, u.active, u.must_change_password,
+           m.role, m.operational_role,
            m.chatwoot_agent_id, m.visibility_scope, u.created_at, u.updated_at
     FROM users u
     JOIN memberships m ON m.user_id = u.id
@@ -841,6 +848,7 @@ function listUsers(organizationId) {
   `).all(organizationId).map((user) => ({
     ...user,
     active: Boolean(user.active),
+    mustChangePassword: Boolean(user.must_change_password),
     operationalRole: normalizeOperationalProfile(user.operational_role, user.role),
     chatwootAgentId: user.chatwoot_agent_id ? Number(user.chatwoot_agent_id) : null,
     visibilityScope: normalizeVisibilityScope(
@@ -885,8 +893,9 @@ function createUser({
   const now = nowIso();
   transaction(() => {
     db.prepare(`
-      INSERT INTO users (id, email, name, password_hash, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?)
+      INSERT INTO users
+      (id, email, name, password_hash, must_change_password, active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, 1, ?, ?)
     `).run(id, normalizedEmail, name, hashPassword(password), now, now);
     db.prepare(`
       INSERT INTO memberships
@@ -982,7 +991,11 @@ function updateUser({
       organizationId
     );
     if (password) {
-      db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+      db.prepare(`
+        UPDATE users
+        SET password_hash = ?, must_change_password = 1, updated_at = ?
+        WHERE id = ?
+      `)
         .run(hashPassword(password), now, userId);
     }
   });
@@ -1010,6 +1023,140 @@ function updateUser({
     },
   });
   return listUsers(organizationId).find((user) => user.id === userId);
+}
+
+function changeOwnPassword({
+  organizationId,
+  userId,
+  currentPassword,
+  newPassword,
+  newPasswordConfirmation,
+}) {
+  const nextPassword = String(newPassword || "");
+  if (nextPassword.length < 10) {
+    const error = new Error("A nova senha deve possuir pelo menos 10 caracteres");
+    error.status = 400;
+    error.code = "PASSWORD_TOO_SHORT";
+    throw error;
+  }
+  if (nextPassword !== String(newPasswordConfirmation || "")) {
+    const error = new Error("A confirmação da nova senha não confere");
+    error.status = 400;
+    error.code = "PASSWORD_CONFIRMATION_MISMATCH";
+    throw error;
+  }
+
+  return transaction(() => {
+    const user = db.prepare(`
+      SELECT u.id, u.password_hash, u.must_change_password
+      FROM users u
+      JOIN memberships m ON m.user_id = u.id
+      WHERE u.id = ? AND m.organization_id = ? AND u.active = 1
+      LIMIT 1
+    `).get(userId, organizationId);
+    if (!user) {
+      const error = new Error("Usuário autenticado não encontrado");
+      error.status = 404;
+      error.code = "USER_NOT_FOUND";
+      throw error;
+    }
+
+    const requiredChange = Boolean(user.must_change_password);
+    if (!requiredChange) {
+      if (!String(currentPassword || "")) {
+        const error = new Error("Informe a senha atual");
+        error.status = 400;
+        error.code = "CURRENT_PASSWORD_REQUIRED";
+        throw error;
+      }
+      if (!verifyPassword(currentPassword, user.password_hash)) {
+        const error = new Error("Senha atual incorreta");
+        error.status = 400;
+        error.code = "CURRENT_PASSWORD_INCORRECT";
+        throw error;
+      }
+    }
+
+    const now = nowIso();
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?, must_change_password = 0, updated_at = ?
+      WHERE id = ?
+    `).run(hashPassword(nextPassword), now, userId);
+    logAudit({
+      organizationId,
+      actorUserId: userId,
+      action: "user.password.changed",
+      entityType: "user",
+      entityId: userId,
+      metadata: { requiredChange },
+    });
+    return { requiredChange };
+  });
+}
+
+function markUsersMustChangePassword({ userIds, excludeUserIds = [], apply = false }) {
+  const included = [...new Set((userIds || []).map((id) => String(id).trim()).filter(Boolean))];
+  const excluded = new Set(
+    (excludeUserIds || []).map((id) => String(id).trim()).filter(Boolean)
+  );
+  const candidates = [...new Set([...included, ...excluded])];
+  const results = [];
+
+  const execute = () => {
+    for (const userId of candidates) {
+      const rows = db.prepare(`
+        SELECT u.id, u.name, u.email, u.active, u.must_change_password,
+               m.organization_id, m.operational_role
+        FROM users u
+        JOIN memberships m ON m.user_id = u.id
+        WHERE u.id = ?
+        ORDER BY m.created_at
+      `).all(userId);
+      if (!rows.length) {
+        results.push({ id: userId, status: "not_found" });
+        continue;
+      }
+
+      const first = rows[0];
+      const summary = {
+        id: first.id,
+        name: first.name,
+        email: first.email,
+        active: Boolean(first.active),
+        operationalRoles: [...new Set(rows.map((row) => row.operational_role))],
+      };
+      if (excluded.has(userId)) {
+        results.push({ ...summary, status: "excluded" });
+        continue;
+      }
+      const status = first.must_change_password
+        ? "already_marked"
+        : apply ? "marked" : "would_mark";
+      results.push({
+        ...summary,
+        status,
+      });
+      if (!apply || first.must_change_password) continue;
+
+      db.prepare(`
+        UPDATE users SET must_change_password = 1, updated_at = ? WHERE id = ?
+      `).run(nowIso(), userId);
+      for (const row of rows) {
+        logAudit({
+          organizationId: row.organization_id,
+          action: "user.password_change_required.marked",
+          entityType: "user",
+          entityId: userId,
+          metadata: { source: "explicit_uuid_migration" },
+        });
+      }
+    }
+  };
+
+  if (apply) transaction(execute);
+  else execute();
+  return results;
 }
 
 function syncTaskFromAttributes({ organizationId, conversationId, attributes, actorUserId }) {
@@ -2363,6 +2510,8 @@ module.exports = {
   listUsers,
   createUser,
   updateUser,
+  changeOwnPassword,
+  markUsersMustChangePassword,
   syncTaskFromAttributes,
   syncInterventions,
   markInterventionAssumed,

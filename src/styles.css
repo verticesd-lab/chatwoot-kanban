@@ -251,6 +251,14 @@ textarea:focus {
   margin-top: 22px;
 }
 
+.form-error.is-success {
+  color: #15803d;
+}
+
+.login-card .button + .button {
+  margin-top: 10px;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -3459,6 +3467,34 @@ tbody tr:hover {
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 18px;
+}
+
+.account-password-section {
+  margin: 22px 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.account-password-section h3 {
+  margin: 0 0 6px;
+}
+
+.account-password-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.account-password-form label {
+  display: grid;
+  gap: 7px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.account-password-form .form-error {
+  margin: 0;
 }
 
 .reactivation-heading h2,

@@ -598,6 +598,11 @@ async function apiRequest(url, options = {}) {
     const error = new Error(message);
     error.status = response.status;
     error.body = body;
+    error.code = body?.code;
+    if (response.status === 428 && body?.code === "PASSWORD_CHANGE_REQUIRED") {
+      if (state.user) state.user.mustChangePassword = true;
+      showPasswordChangeRequired();
+    }
     throw error;
   }
 
@@ -747,6 +752,10 @@ async function initializeSession() {
     const session = await apiRequest("/api/session");
     if (session.connected) {
       applySessionPayload(session);
+      if (state.user?.mustChangePassword) {
+        showPasswordChangeRequired();
+        return;
+      }
       showApplication();
       await loadCentralConfiguration({ skipRender: true });
       renderIdentity();
@@ -761,13 +770,23 @@ async function initializeSession() {
 
 function showLogin() {
   elements.loginScreen.classList.remove("is-hidden");
+  elements.passwordChangeScreen.classList.add("is-hidden");
   elements.app.classList.add("is-hidden");
 }
 
 function showApplication() {
   elements.loginScreen.classList.add("is-hidden");
+  elements.passwordChangeScreen.classList.add("is-hidden");
   elements.app.classList.remove("is-hidden");
   renderIdentity();
+}
+
+function showPasswordChangeRequired() {
+  elements.loginScreen.classList.add("is-hidden");
+  elements.app.classList.add("is-hidden");
+  elements.passwordChangeScreen.classList.remove("is-hidden");
+  elements.requiredPasswordError.textContent = "";
+  elements.requiredNewPassword.focus();
 }
 
 async function handleLogin(event) {
@@ -785,6 +804,10 @@ async function handleLogin(event) {
     });
     applySessionPayload(response);
     elements.loginPassword.value = "";
+    if (state.user?.mustChangePassword) {
+      showPasswordChangeRequired();
+      return;
+    }
     showApplication();
     await loadCentralConfiguration({ skipRender: true });
     renderIdentity();
@@ -794,6 +817,63 @@ async function handleLogin(event) {
   } finally {
     elements.loginSubmit.disabled = false;
     elements.loginSubmit.textContent = "Entrar no CRM";
+  }
+}
+
+async function handleRequiredPasswordChange(event) {
+  event.preventDefault();
+  elements.requiredPasswordError.textContent = "";
+  elements.requiredPasswordSubmit.disabled = true;
+  elements.requiredPasswordSubmit.textContent = "Salvando...";
+
+  try {
+    const response = await apiRequest("/api/account/password", {
+      method: "PUT",
+      body: JSON.stringify({
+        newPassword: elements.requiredNewPassword.value,
+        newPasswordConfirmation: elements.requiredNewPasswordConfirmation.value,
+      }),
+    });
+    applySessionPayload(response);
+    elements.requiredPasswordForm.reset();
+    showApplication();
+    await loadCentralConfiguration({ skipRender: true });
+    renderIdentity();
+    await loadWorkspace({ skipCentralReload: true });
+    showToast("Sua nova senha foi criada.", "success");
+  } catch (error) {
+    elements.requiredPasswordError.textContent = error.message;
+  } finally {
+    elements.requiredPasswordSubmit.disabled = false;
+    elements.requiredPasswordSubmit.textContent = "Salvar nova senha";
+  }
+}
+
+async function handleVoluntaryPasswordChange(event) {
+  event.preventDefault();
+  elements.accountPasswordResult.textContent = "";
+  elements.accountPasswordResult.classList.remove("is-success");
+  elements.accountPasswordSubmit.disabled = true;
+  elements.accountPasswordSubmit.textContent = "Alterando...";
+
+  try {
+    const response = await apiRequest("/api/account/password", {
+      method: "PUT",
+      body: JSON.stringify({
+        currentPassword: elements.accountCurrentPassword.value,
+        newPassword: elements.accountNewPassword.value,
+        newPasswordConfirmation: elements.accountNewPasswordConfirmation.value,
+      }),
+    });
+    applySessionPayload(response);
+    elements.accountPasswordForm.reset();
+    elements.accountPasswordResult.textContent = "Senha alterada com sucesso.";
+    elements.accountPasswordResult.classList.add("is-success");
+  } catch (error) {
+    elements.accountPasswordResult.textContent = error.message;
+  } finally {
+    elements.accountPasswordSubmit.disabled = false;
+    elements.accountPasswordSubmit.textContent = "Alterar senha";
   }
 }
 
@@ -810,6 +890,8 @@ async function logout() {
     state.presence = [];
     state.handoffTargets = [];
     state.transferRequests = [];
+    elements.requiredPasswordForm?.reset();
+    elements.accountPasswordForm?.reset();
     showLogin();
   }
 }
@@ -4905,6 +4987,13 @@ function cacheElements() {
     loginPassword: byId("login-password"),
     loginSubmit: byId("login-submit"),
     loginError: byId("login-error"),
+    passwordChangeScreen: byId("password-change-screen"),
+    requiredPasswordForm: byId("required-password-form"),
+    requiredNewPassword: byId("required-new-password"),
+    requiredNewPasswordConfirmation: byId("required-new-password-confirmation"),
+    requiredPasswordSubmit: byId("required-password-submit"),
+    requiredPasswordLogout: byId("required-password-logout"),
+    requiredPasswordError: byId("required-password-error"),
     app: byId("app"),
     sidebarAccountId: byId("sidebar-account-id"),
     sidebarUserName: byId("sidebar-user-name"),
@@ -4962,6 +5051,12 @@ function cacheElements() {
     settingsCurrentUser: byId("settings-current-user"),
     settingsCurrentScope: byId("settings-current-scope"),
     settingsLinkedAgent: byId("settings-linked-agent"),
+    accountPasswordForm: byId("account-password-form"),
+    accountCurrentPassword: byId("account-current-password"),
+    accountNewPassword: byId("account-new-password"),
+    accountNewPasswordConfirmation: byId("account-new-password-confirmation"),
+    accountPasswordSubmit: byId("account-password-submit"),
+    accountPasswordResult: byId("account-password-result"),
     pageEyebrow: byId("page-eyebrow"),
     pageTitle: byId("page-title"),
     globalSearch: byId("global-search"),
@@ -5149,6 +5244,9 @@ function cacheElements() {
 
 function bindEvents() {
   elements.loginForm.addEventListener("submit", handleLogin);
+  elements.requiredPasswordForm.addEventListener("submit", handleRequiredPasswordChange);
+  elements.requiredPasswordLogout.addEventListener("click", logout);
+  elements.accountPasswordForm.addEventListener("submit", handleVoluntaryPasswordChange);
   elements.logoutButton.addEventListener("click", logout);
   elements.refreshButton.addEventListener("click", () => loadWorkspace({ background: false }));
   elements.refreshPresence?.addEventListener("click", () => refreshPresence({ silent: false }));

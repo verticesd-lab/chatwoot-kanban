@@ -19,6 +19,7 @@ const missingIds = [...new Set(referencedIds.filter((id) => !htmlIds.includes(id
 assert.deepStrictEqual(missingIds, [], "Todo byId do JavaScript precisa existir no HTML");
 
 for (const endpoint of [
+  "/api/account/password",
   "/api/crm/presence/heartbeat",
   "/api/crm/presence",
   "/api/crm/handoff/targets",
@@ -122,5 +123,11 @@ assert(server.includes('canonicalPhone: incomingIdentity.canonicalPhone'), 'webh
 assert(server.includes('recipientMatchesConversation'), 'fallback deve localizar conversas da mesma identidade');
 assert(server.includes('replyConversationId'), 'auditoria deve preservar conversa de resposta');
 assert(fs.existsSync(path.join(root, 'src', 'contact-identity.js')), 'módulo de identidade canônica deve existir');
+assert(html.includes("Crie sua nova senha"), "tela de troca obrigatória deve existir");
+assert(html.includes('id="account-password-form"'), "Minha conta deve permitir alterar senha");
+assert(script.includes("function showPasswordChangeRequired()"), "frontend deve isolar a troca obrigatória");
+assert(script.includes('body?.code === "PASSWORD_CHANGE_REQUIRED"'), "cliente HTTP deve tratar o bloqueio central");
+assert(server.includes("res.status(428)"), "backend deve bloquear APIs durante troca obrigatória");
+assert(server.includes('code: "PASSWORD_CHANGE_REQUIRED"'), "bloqueio deve possuir código estável");
 
 console.log("CRM V1.3.6.6 static UI/API contract tests: OK");

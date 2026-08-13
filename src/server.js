@@ -152,6 +152,15 @@ function requireSession(req, res, next) {
   const session = db.getSession(getRawSessionToken(req));
   if (!session) return res.status(401).json({ error: "Sessão não autenticada ou expirada" });
   req.crmSession = session;
+  if (
+    session.must_change_password &&
+    !(req.method === "PUT" && req.path === "/api/account/password")
+  ) {
+    return res.status(428).json({
+      error: "Crie sua nova senha para continuar",
+      code: "PASSWORD_CHANGE_REQUIRED",
+    });
+  }
   db.touchPresence({
     organizationId: session.organization_id,
     userId: session.user_id,
@@ -883,6 +892,35 @@ app.delete("/api/session", (req, res) => {
   db.deleteSession(rawToken);
   res.setHeader("Set-Cookie", clearSessionCookie(req));
   return res.status(204).send();
+});
+
+app.put("/api/account/password", requireSession, (req, res) => {
+  if (
+    Object.prototype.hasOwnProperty.call(req.body || {}, "userId") ||
+    Object.prototype.hasOwnProperty.call(req.body || {}, "user_id")
+  ) {
+    return res.status(400).json({
+      error: "A alteração de senha opera somente sobre o usuário autenticado",
+      code: "ARBITRARY_USER_ID_NOT_ALLOWED",
+    });
+  }
+
+  try {
+    db.changeOwnPassword({
+      organizationId: req.crmSession.organization_id,
+      userId: req.crmSession.user_id,
+      currentPassword: req.body?.currentPassword,
+      newPassword: req.body?.newPassword,
+      newPasswordConfirmation: req.body?.newPasswordConfirmation,
+    });
+    const session = db.getSession(getRawSessionToken(req));
+    return res.json(db.sessionPayload(session));
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      error: error.message,
+      code: error.code || "PASSWORD_CHANGE_FAILED",
+    });
+  }
 });
 
 app.post("/api/crm/presence/heartbeat", requireSession, (req, res) => {

@@ -53,6 +53,55 @@
       </form>
     </div>
 
+    <div id="password-change-screen" class="login-screen is-hidden">
+      <form id="required-password-form" class="login-card">
+        <div class="login-brand">
+          <img
+            class="login-brand-logo"
+            src="/assets/vr-multimarcas-logo.jpg"
+            alt="VR Multimarcas"
+          />
+          <p class="eyebrow">SEGURANÇA DA CONTA</p>
+          <h1>Crie sua nova senha</h1>
+          <p class="muted">
+            Sua senha atual é temporária. Defina uma senha pessoal para acessar o CRM.
+          </p>
+        </div>
+
+        <label>
+          Nova senha
+          <input
+            id="required-new-password"
+            type="password"
+            minlength="10"
+            autocomplete="new-password"
+            placeholder="Mínimo de 10 caracteres"
+            required
+          />
+        </label>
+
+        <label>
+          Confirmar nova senha
+          <input
+            id="required-new-password-confirmation"
+            type="password"
+            minlength="10"
+            autocomplete="new-password"
+            placeholder="Digite novamente"
+            required
+          />
+        </label>
+
+        <button id="required-password-submit" class="button button-primary" type="submit">
+          Salvar nova senha
+        </button>
+        <button id="required-password-logout" class="button button-ghost" type="button">
+          Sair da conta
+        </button>
+        <p id="required-password-error" class="form-error" role="alert"></p>
+      </form>
+    </div>
+
     <div id="app" class="app-shell is-hidden">
       <aside class="sidebar">
         <div class="sidebar-brand">
@@ -797,7 +846,7 @@
                 <div class="panel-header">
                   <div>
                     <p class="eyebrow">SESSÃO</p>
-                    <h2>Conta conectada</h2>
+                    <h2>Minha conta</h2>
                   </div>
                 </div>
                 <dl class="definition-list">
@@ -810,6 +859,28 @@
                   <div><dt>Credencial Chatwoot</dt><dd>Criptografada no servidor</dd></div>
                   <div><dt>Configurações</dt><dd>Compartilhadas no banco central</dd></div>
                 </dl>
+                <div class="account-password-section">
+                  <h3>Alterar senha</h3>
+                  <p class="muted">Confirme sua senha atual antes de definir uma nova.</p>
+                  <form id="account-password-form" class="account-password-form">
+                    <label>
+                      Senha atual
+                      <input id="account-current-password" type="password" autocomplete="current-password" required />
+                    </label>
+                    <label>
+                      Nova senha
+                      <input id="account-new-password" type="password" minlength="10" autocomplete="new-password" required />
+                    </label>
+                    <label>
+                      Confirmar nova senha
+                      <input id="account-new-password-confirmation" type="password" minlength="10" autocomplete="new-password" required />
+                    </label>
+                    <button id="account-password-submit" class="button button-primary" type="submit">
+                      Alterar senha
+                    </button>
+                    <p id="account-password-result" class="form-error" role="status"></p>
+                  </form>
+                </div>
                 <button id="logout-button" class="button button-danger">Sair da conta</button>
               </article>
             </div>
