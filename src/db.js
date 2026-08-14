@@ -60,9 +60,9 @@ const OPERATIONAL_PROFILES = {
 };
 
 const OPERATIONAL_PERMISSIONS = {
-  admin: ["assignments:manage", "interventions:manage"],
-  manager: ["assignments:manage", "interventions:manage"],
-  sdr: ["interventions:manage", "reactivations:manage"],
+  admin: ["assignments:manage", "interventions:manage", "credit:monitor"],
+  manager: ["assignments:manage", "interventions:manage", "credit:monitor"],
+  sdr: ["interventions:manage", "reactivations:manage", "credit:monitor"],
   seller: ["interventions:manage"],
   agent: ["assignments:manage", "interventions:manage"],
   viewer: [],

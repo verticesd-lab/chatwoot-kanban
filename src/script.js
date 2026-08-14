@@ -82,6 +82,18 @@ const state = {
   tutorialCategory: "all",
   tutorialTab: "watch",
   tutorialLoading: false,
+  credit: {
+    enabled: false,
+    readOnly: true,
+    metrics: {
+      cpfCollectedToday: 0,
+      processing: 0,
+      waitingInput: 0,
+      attentionRequired: 0,
+    },
+    items: [],
+    loading: false,
+  },
   reactivation: {
     configuration: null,
     candidates: [],
@@ -716,6 +728,7 @@ function renderIdentity() {
   elements.replySubmit.disabled = !hasPermission("messages:send");
   updateArchiveNavigation();
   updateReactivationNavigation();
+  updateCreditNavigation();
   renderPresence();
 }
 
@@ -1115,6 +1128,7 @@ function renderAll() {
   renderPresence();
   updateInterventionNavigation();
   updateArchiveNavigation();
+  updateCreditNavigation();
 }
 
 function monthlyGoalMessage(progress) {
@@ -3392,6 +3406,47 @@ function updateArchiveNavigation() {
   elements.archiveNavItem?.classList.toggle("is-hidden", !canManage);
 }
 
+function updateCreditNavigation() {
+  const allowed = hasPermission("credit:monitor");
+  elements.creditNavItem?.classList.toggle("is-hidden", !allowed);
+}
+
+function renderCreditOperations() {
+  const metrics = state.credit.metrics || {};
+  if (elements.creditMetricCpfCollectedToday) {
+    elements.creditMetricCpfCollectedToday.textContent = String(Math.max(0, Number(metrics.cpfCollectedToday) || 0));
+  }
+  if (elements.creditMetricProcessing) {
+    elements.creditMetricProcessing.textContent = String(Math.max(0, Number(metrics.processing) || 0));
+  }
+  if (elements.creditMetricWaitingInput) {
+    elements.creditMetricWaitingInput.textContent = String(Math.max(0, Number(metrics.waitingInput) || 0));
+  }
+  if (elements.creditMetricAttentionRequired) {
+    elements.creditMetricAttentionRequired.textContent = String(Math.max(0, Number(metrics.attentionRequired) || 0));
+  }
+}
+
+async function loadCreditOperations(options = {}) {
+  if (!hasPermission("credit:monitor") || state.credit.loading) return;
+  state.credit.loading = true;
+  try {
+    const response = await apiRequest("/api/credit/operations");
+    state.credit = {
+      enabled: response?.enabled === true,
+      readOnly: response?.readOnly !== false,
+      metrics: response?.metrics || {},
+      items: Array.isArray(response?.items) ? response.items : [],
+      loading: false,
+    };
+    renderCreditOperations();
+  } catch (error) {
+    if (!options.silent) showToast(`Não foi possível carregar a central de crédito: ${error.message}`, "error");
+  } finally {
+    state.credit.loading = false;
+  }
+}
+
 function renderHistory() {
   if (!elements.historyList) return;
   const conversations = historyConversations();
@@ -4912,6 +4967,7 @@ function scheduleReactivationReload() {
 }
 
 function switchView(viewName) {
+  if (viewName === "credit" && !hasPermission("credit:monitor")) return;
   state.currentView = viewName;
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("is-active"));
   document.querySelectorAll(".nav-item").forEach((item) => item.classList.remove("is-active"));
@@ -4929,6 +4985,7 @@ function switchView(viewName) {
     tasks: ["PRODUTIVIDADE", "Tarefas comerciais"],
     contacts: ["RELACIONAMENTO", "Contatos"],
     tutorials: ["CENTRAL DE AJUDA", "Tutoriais"],
+    credit: ["OPERAÇÃO DE CRÉDITO", "Central de crédito"],
     settings: ["ADMINISTRAÇÃO", "Configurações"],
   };
   const [eyebrow, title] = titles[viewName] || titles.dashboard;
@@ -4936,6 +4993,7 @@ function switchView(viewName) {
   elements.pageTitle.textContent = title;
   if (viewName === "tutorials") loadTutorials({ silent: true });
   if (viewName === "reactivations") loadReactivationCenter({ silent: true });
+  if (viewName === "credit") loadCreditOperations();
 }
 
 function clearFilters() {
@@ -5021,6 +5079,12 @@ function cacheElements() {
     refreshPresence: byId("refresh-presence"),
     currentUserStatusDot: byId("current-user-status-dot"),
     archiveNavItem: byId("archive-nav-item"),
+    creditNavItem: byId("credit-nav-item"),
+    creditMetricCpfCollectedToday: byId("credit-metric-cpf-collected-today"),
+    creditMetricProcessing: byId("credit-metric-processing"),
+    creditMetricWaitingInput: byId("credit-metric-waiting-input"),
+    creditMetricAttentionRequired: byId("credit-metric-attention-required"),
+    creditOperationsList: byId("credit-operations-list"),
     reactivationNavItem: byId("reactivation-nav-item"),
     reactivationNavCount: byId("reactivation-nav-count"),
     reactivationRefresh: byId("reactivation-refresh"),

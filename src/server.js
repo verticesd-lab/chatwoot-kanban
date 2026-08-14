@@ -937,6 +937,25 @@ app.get("/api/crm/presence", requireSession, requirePermission("presence:read"),
   return res.json({ presence: db.listPresence(req.crmSession.organization_id) });
 });
 
+app.get(
+  "/api/credit/operations",
+  requireSession,
+  requirePermission("credit:monitor"),
+  (_req, res) => {
+    return res.json({
+      enabled: false,
+      readOnly: true,
+      metrics: {
+        cpfCollectedToday: 0,
+        processing: 0,
+        waitingInput: 0,
+        attentionRequired: 0,
+      },
+      items: [],
+    });
+  }
+);
+
 const CRM_ATTRIBUTE_DEFINITIONS = [
   {
     attribute_display_name: "Etapa do CRM",

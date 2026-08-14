@@ -159,6 +159,10 @@
             <span class="nav-icon">▸</span>
             Tutoriais
           </button>
+          <button id="credit-nav-item" class="nav-item is-hidden" data-view="credit">
+            <span class="nav-icon">◇</span>
+            Crédito
+          </button>
         </nav>
 
         <div class="sidebar-spacer"></div>
@@ -731,6 +735,49 @@
                 <div id="tutorial-manage-list" class="tutorial-manage-list"></div>
               </article>
             </div>
+          </section>
+
+          <section id="view-credit" class="view">
+            <div class="credit-heading">
+              <div>
+                <p class="eyebrow">OPERAÇÃO DE CRÉDITO</p>
+                <h2>Central de crédito</h2>
+                <p class="muted">Acompanhe pré-análises, pendências e situações que exigem atenção.</p>
+              </div>
+              <span class="credit-read-only-badge">SOMENTE LEITURA</span>
+            </div>
+
+            <div class="credit-metrics" aria-label="Indicadores da operação de crédito">
+              <article class="credit-metric-card">
+                <span>CPFs coletados hoje</span>
+                <strong id="credit-metric-cpf-collected-today">0</strong>
+              </article>
+              <article class="credit-metric-card">
+                <span>Análises em andamento</span>
+                <strong id="credit-metric-processing">0</strong>
+              </article>
+              <article class="credit-metric-card">
+                <span>Aguardando informação</span>
+                <strong id="credit-metric-waiting-input">0</strong>
+              </article>
+              <article class="credit-metric-card">
+                <span>Exigem atenção</span>
+                <strong id="credit-metric-attention-required">0</strong>
+              </article>
+            </div>
+
+            <article class="panel credit-queue-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">MONITORAMENTO</p>
+                  <h2>Fila de análise</h2>
+                </div>
+              </div>
+              <div id="credit-operations-list" class="credit-empty-state">
+                <strong>Nenhuma análise disponível ainda.</strong>
+                <span>Os dados aparecerão aqui quando a integração com o AutoCore for ativada.</span>
+              </div>
+            </article>
           </section>
 
           <section id="view-settings" class="view">
