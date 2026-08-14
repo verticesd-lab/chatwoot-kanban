@@ -254,14 +254,14 @@ textarea:focus {
 /* Central de crédito — fundação operacional read-only */
 .credit-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 18px;
 }
 
-.credit-heading h2 {
-  margin: 2px 0 5px;
+.credit-heading .muted {
+  margin: 0;
 }
 
 .credit-read-only-badge {
