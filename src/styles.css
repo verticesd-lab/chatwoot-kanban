@@ -335,8 +335,156 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.credit-error-state {
+  border-color: #fecaca;
+  color: #991b1b;
+  background: #fff7f7;
+}
+
+.credit-loading-state strong::before {
+  content: "";
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 8px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: credit-spin 0.8s linear infinite;
+}
+
+@keyframes credit-spin {
+  to { transform: rotate(360deg); }
+}
+
+.credit-operations-list {
+  display: grid;
+  gap: 9px;
+}
+
+.credit-operation-row {
+  display: grid;
+  grid-template-columns: minmax(90px, .7fr) minmax(72px, .6fr) minmax(130px, 1fr) minmax(100px, .8fr) minmax(110px, .9fr) minmax(180px, 1.5fr) minmax(140px, 1.2fr) minmax(130px, 1fr);
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s, box-shadow .16s, transform .16s;
+}
+
+.credit-operation-row:hover,
+.credit-operation-row:focus-visible {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, .09);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.credit-operation-field {
+  min-width: 0;
+}
+
+.credit-operation-field small,
+.credit-operation-field strong {
+  display: block;
+}
+
+.credit-operation-field small {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.credit-operation-field strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credit-status {
+  color: #1d4ed8;
+}
+
+.credit-status-attention_required,
+.credit-status-blocked,
+.credit-status-failed {
+  color: #b91c1c;
+}
+
+.credit-status-available,
+.credit-status-completed {
+  color: #15803d;
+}
+
+.credit-detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.credit-detail-section h3 {
+  margin: 0 0 14px;
+  font-size: 14px;
+}
+
+.credit-detail-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+
+.credit-detail-row {
+  display: grid;
+  grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr);
+  gap: 14px;
+}
+
+.credit-detail-row dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.credit-detail-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.credit-bank-detail-list {
+  display: grid;
+  gap: 10px;
+}
+
+.credit-bank-detail {
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.credit-bank-detail > strong {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
 @media (max-width: 900px) {
   .credit-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .credit-operation-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -347,6 +495,11 @@ textarea:focus {
   }
 
   .credit-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .credit-operation-row,
+  .credit-detail-row {
     grid-template-columns: 1fr;
   }
 }

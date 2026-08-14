@@ -1,5 +1,6 @@
 const assert = require("assert");
 const fs = require("fs");
+const http = require("http");
 const net = require("net");
 const os = require("os");
 const path = require("path");
@@ -8,6 +9,7 @@ const { spawn } = require("child_process");
 const root = path.resolve(__dirname, "..");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-credit-panel-test-"));
 const databasePath = path.join(tempDir, "crm.sqlite");
+const upstreamToken = "token-autocore-teste-credito-1234567890-seguro";
 
 Object.assign(process.env, {
   CRM_DB_PATH: databasePath,
@@ -20,17 +22,14 @@ Object.assign(process.env, {
   CHATWOOT_API_TOKEN: "token-chatwoot-credit-test",
   REACTIVATION_SEND_ENABLED: "false",
   BASE_URL: "https://chat.example.com",
+  CREDIT_PANEL_ENABLED: "false",
+  CREDIT_PANEL_WRITE_ENABLED: "false",
 });
 
-const expectedContract = {
+const expectedDisabledContract = {
   enabled: false,
   readOnly: true,
-  metrics: {
-    cpfCollectedToday: 0,
-    processing: 0,
-    waitingInput: 0,
-    attentionRequired: 0,
-  },
+  metrics: { cpfCollectedToday: 0, processing: 0, waitingInput: 0, attentionRequired: 0 },
   items: [],
 };
 
@@ -48,9 +47,7 @@ function availablePort() {
 async function waitForServer(child, baseUrl, output) {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Servidor encerrou antes de iniciar:\n${output.join("")}`);
-    }
+    if (child.exitCode !== null) throw new Error(`Servidor encerrou antes de iniciar:\n${output.join("")}`);
     try {
       const response = await fetch(`${baseUrl}/health`);
       if (response.ok) return;
@@ -71,30 +68,167 @@ async function stopServer(child) {
   ]);
 }
 
-async function requestCreditOperations(baseUrl, token) {
-  const response = await fetch(`${baseUrl}/api/credit/operations`, {
+async function startCrm(extraEnv = {}) {
+  const port = await availablePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const output = [];
+  const child = spawn(process.execPath, [path.join("src", "server.js")], {
+    cwd: root,
+    env: { ...process.env, PORT: String(port), ...extraEnv },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk) => output.push(chunk.toString()));
+  child.stderr.on("data", (chunk) => output.push(chunk.toString()));
+  await waitForServer(child, baseUrl, output);
+  return { child, baseUrl };
+}
+
+async function requestCreditOperations(baseUrl, token, query = "") {
+  const response = await fetch(`${baseUrl}/api/credit/operations${query}`, {
     headers: token ? { Cookie: `crm_session=${token}` } : {},
   });
+  return { status: response.status, body: await response.json() };
+}
+
+function validUpstreamContract(readOnly = true) {
+  const unexpected = {
+    cpf: "12345678901",
+    phone: "+5565999999999",
+    email: "pessoa@example.com",
+    birthdate: "1990-01-01",
+    cnh: "12345678900",
+    payload_json: { secret: "raw-job-payload" },
+    pre_approval_status: "approved-secret",
+    tokens: [upstreamToken],
+    secrets: "internal-secret",
+  };
   return {
-    status: response.status,
-    body: await response.json(),
+    enabled: true,
+    readOnly,
+    generatedAt: "2026-08-14T12:00:00.000Z",
+    storeId: 999,
+    metrics: { cpfCollectedToday: 2, processing: 1, waitingInput: 0, attentionRequired: 1, secretMetric: 9 },
+    ...unexpected,
+    items: [
+      {
+        conversationId: "123",
+        stateUuid: "7b342f91-00c1-4bed-a345-55e7aa8fbfff",
+        revision: 1,
+        applicantAttempt: 1,
+        status: "processing",
+        cpfLast4: "4725",
+        ...unexpected,
+        facts: {
+          cpfPresent: true,
+          birthDatePresent: false,
+          phonePresent: true,
+          emailPresent: false,
+          cnhPresent: false,
+          downPayment: { known: false, cents: null, raw: "não vazar" },
+          cpf: "12345678901",
+        },
+        banks: [{
+          code: "623", name: null, status: "processing", available: null,
+          missingFields: ["birth_date"], token: upstreamToken,
+        }],
+        job: {
+          type: "credit.credere.portfolio.execute", status: "processing", attempts: 1, maxAttempts: 2,
+          createdAt: "2026-08-14T11:00:00.000Z", updatedAt: "2026-08-14T12:00:00.000Z",
+          payload_json: { cpf: "12345678901" },
+        },
+        nextAction: null,
+        createdAt: "2026-08-14T11:00:00.000Z",
+        updatedAt: "2026-08-14T12:00:00.000Z",
+      },
+      {
+        conversationId: "124",
+        stateUuid: "e2cc31f7-1cd2-4c08-9d82-f6dbd9028d54",
+        revision: 2,
+        applicantAttempt: 2,
+        status: "ready",
+        cpfLast4: "47x5",
+        facts: {
+          cpfPresent: true, birthDatePresent: true, phonePresent: true, emailPresent: true, cnhPresent: true,
+          downPayment: { known: true, cents: 0 },
+        },
+        banks: [{ code: "001", name: "Banco Teste", status: "ready", available: false, missingFields: [] }],
+        job: null,
+        nextAction: "review",
+        createdAt: "2026-08-14T10:00:00.000Z",
+        updatedAt: "2026-08-14T12:05:00.000Z",
+      },
+    ],
+  };
+}
+
+function findForbiddenKey(value, forbiddenKeys) {
+  if (!value || typeof value !== "object") return null;
+  for (const [key, child] of Object.entries(value)) {
+    if (forbiddenKeys.has(key)) return key;
+    const nested = findForbiddenKey(child, forbiddenKeys);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+async function startMockAutoCore() {
+  const state = { mode: "valid", requests: [], redirectHits: 0 };
+  const server = http.createServer((req, res) => {
+    state.requests.push({ url: req.url, authorization: req.headers.authorization });
+    if (req.url.startsWith("/redirect-target")) {
+      state.redirectHits += 1;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(validUpstreamContract()));
+      return;
+    }
+    if (state.mode === "redirect") {
+      res.writeHead(302, { Location: "/redirect-target" });
+      res.end();
+      return;
+    }
+    if (state.mode === "upstream-error") {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ token: upstreamToken, internalUrl: "http://autocore.internal", cpf: "12345678901" }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(validUpstreamContract(state.mode !== "writable-contract")));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return {
+    state,
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 }
 
 (async () => {
-  let child;
+  let crm;
+  let mock;
   try {
+    const gateway = require("../src/autocore-credit");
+    assert.throws(() => gateway.readCreditConfig({
+      CREDIT_PANEL_WRITE_ENABLED: "false",
+      AUTOCORE_INTERNAL_BASE_URL: "http://user:password@127.0.0.1",
+      AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
+      AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "1",
+    }), /central de crédito/);
+    assert.throws(() => gateway.parseLimit("101"), /central de crédito/);
+    assert.throws(() => gateway.readCreditConfig({
+      CREDIT_PANEL_WRITE_ENABLED: "true",
+      AUTOCORE_INTERNAL_BASE_URL: "http://127.0.0.1",
+      AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
+      AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "1",
+    }), /central de crédito/, "write enabled deve falhar fechado");
+
     const db = require("../src/db");
-    const bootstrap = db.bootstrapFromEnv("https://chat.example.com");
-    assert.strictEqual(bootstrap.bootstrapped, true);
-
+    assert.strictEqual(db.bootstrapFromEnv("https://chat.example.com").bootstrapped, true);
     const admin = db.authenticate("admin-credit@example.com", "admin-credit-123");
-    assert(admin);
     const organizationId = admin.organization_id;
-    const sessions = {
-      admin: db.createSession(admin, 60_000).rawToken,
-    };
-
+    const sessions = { admin: db.createSession(admin, 60_000).rawToken };
     const profiles = [
       { role: "manager", agentId: null, scope: "all" },
       { role: "sdr", agentId: 61, scope: "unassigned_and_mine" },
@@ -102,88 +236,133 @@ async function requestCreditOperations(baseUrl, token) {
       { role: "agent", agentId: null, scope: "all" },
       { role: "viewer", agentId: null, scope: "all" },
     ];
-
     for (const profile of profiles) {
       const temporaryPassword = `temporaria-${profile.role}-123`;
       const permanentPassword = `permanente-${profile.role}-123`;
       const user = db.createUser({
-        organizationId,
-        actorUserId: admin.id,
-        name: `Perfil ${profile.role}`,
-        email: `${profile.role}-credit@example.com`,
-        password: temporaryPassword,
-        operationalRole: profile.role,
-        chatwootAgentId: profile.agentId,
-        visibilityScope: profile.scope,
+        organizationId, actorUserId: admin.id, name: `Perfil ${profile.role}`,
+        email: `${profile.role}-credit@example.com`, password: temporaryPassword,
+        operationalRole: profile.role, chatwootAgentId: profile.agentId, visibilityScope: profile.scope,
       });
       db.changeOwnPassword({
-        organizationId,
-        userId: user.id,
-        newPassword: permanentPassword,
+        organizationId, userId: user.id, newPassword: permanentPassword,
         newPasswordConfirmation: permanentPassword,
       });
-      const authenticated = db.authenticate(user.email, permanentPassword);
-      sessions[profile.role] = db.createSession(authenticated, 60_000).rawToken;
+      sessions[profile.role] = db.createSession(db.authenticate(user.email, permanentPassword), 60_000).rawToken;
     }
-
-    const expectedPermissions = {
-      admin: true,
-      manager: true,
-      sdr: true,
-      seller: false,
-      agent: false,
-      viewer: false,
-    };
+    const expectedPermissions = { admin: true, manager: true, sdr: true, seller: false, agent: false, viewer: false };
     for (const [role, allowed] of Object.entries(expectedPermissions)) {
-      const session = db.getSession(sessions[role]);
-      assert.strictEqual(
-        session.permissions.includes("credit:monitor"),
-        allowed,
-        `${role} credit:monitor deve ser ${allowed ? "permitido" : "negado"}`
-      );
+      assert.strictEqual(db.getSession(sessions[role]).permissions.includes("credit:monitor"), allowed);
     }
-
     db.closeDatabase();
 
-    const port = await availablePort();
-    const baseUrl = `http://127.0.0.1:${port}`;
-    const output = [];
-    child = spawn(process.execPath, [path.join("src", "server.js")], {
-      cwd: root,
-      env: { ...process.env, PORT: String(port) },
-      stdio: ["ignore", "pipe", "pipe"],
+    mock = await startMockAutoCore();
+    crm = await startCrm({
+      CREDIT_PANEL_ENABLED: "false",
+      AUTOCORE_INTERNAL_BASE_URL: mock.baseUrl,
+      AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
+      AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "7",
     });
-    child.stdout.on("data", (chunk) => output.push(chunk.toString()));
-    child.stderr.on("data", (chunk) => output.push(chunk.toString()));
-    await waitForServer(child, baseUrl, output);
-
-    let response = await requestCreditOperations(baseUrl);
-    assert.strictEqual(response.status, 401, "endpoint deve exigir sessão");
-
+    let response = await requestCreditOperations(crm.baseUrl);
+    assert.strictEqual(response.status, 401);
     for (const role of ["admin", "manager", "sdr"]) {
-      response = await requestCreditOperations(baseUrl, sessions[role]);
+      response = await requestCreditOperations(crm.baseUrl, sessions[role]);
       assert.strictEqual(response.status, 200, `${role} deve acessar o endpoint`);
-      assert.deepStrictEqual(response.body, expectedContract, "contrato deve permanecer vazio e read-only");
+      assert.deepStrictEqual(response.body, expectedDisabledContract);
     }
-
     for (const role of ["seller", "agent", "viewer"]) {
-      response = await requestCreditOperations(baseUrl, sessions[role]);
+      response = await requestCreditOperations(crm.baseUrl, sessions[role]);
       assert.strictEqual(response.status, 403, `${role} não deve acessar o endpoint`);
     }
+    assert.strictEqual(mock.state.requests.length, 0, "painel disabled não deve chamar AutoCore");
+    await stopServer(crm.child);
+
+    crm = await startCrm({
+      CREDIT_PANEL_ENABLED: "true",
+      AUTOCORE_INTERNAL_BASE_URL: "",
+      AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
+      AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "7",
+    });
+    response = await requestCreditOperations(crm.baseUrl, sessions.admin);
+    assert.strictEqual(response.status, 503, "config inválida deve falhar fechada");
+    assert.deepStrictEqual(response.body, { error: "Não foi possível consultar a central de crédito" });
+    await stopServer(crm.child);
+
+    crm = await startCrm({
+      CREDIT_PANEL_ENABLED: "true",
+      CREDIT_PANEL_WRITE_ENABLED: "false",
+      AUTOCORE_INTERNAL_BASE_URL: mock.baseUrl,
+      AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
+      AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "7",
+      AUTOCORE_CREDIT_OPERATIONS_TIMEOUT_MS: "2000",
+    });
+    mock.state.mode = "valid";
+    response = await requestCreditOperations(
+      crm.baseUrl,
+      sessions.admin,
+      `?limit=17&store_id=999&token=${encodeURIComponent(upstreamToken)}`
+    );
+    assert.strictEqual(response.status, 200);
+    const captured = mock.state.requests.at(-1);
+    const capturedUrl = new URL(captured.url, mock.baseUrl);
+    assert.strictEqual(captured.authorization, `Bearer ${upstreamToken}`);
+    assert.strictEqual(capturedUrl.pathname, "/internal/credit/operations");
+    assert.strictEqual(capturedUrl.searchParams.get("store_id"), "7");
+    assert.strictEqual(capturedUrl.searchParams.get("limit"), "17");
+    assert.strictEqual(response.body.storeId, 7);
+    assert.strictEqual(response.body.readOnly, true);
+    assert.strictEqual(response.body.items[0].cpfLast4, "4725");
+    assert.strictEqual(Object.hasOwn(response.body.items[1], "cpfLast4"), false);
+    assert.strictEqual(response.body.items[0].banks[0].available, null);
+    assert.deepStrictEqual(response.body.items[0].facts.downPayment, { known: false, cents: null });
+    assert.deepStrictEqual(response.body.items[1].facts.downPayment, { known: true, cents: 0 });
+
+    const serialized = JSON.stringify(response.body);
+    assert.strictEqual(findForbiddenKey(response.body, new Set([
+      "cpf", "phone", "email", "birthdate", "cnh", "payload_json", "pre_approval_status", "tokens", "secrets",
+    ])), null, "campos inesperados de PII e payload devem ser descartados");
+    for (const forbidden of [
+      upstreamToken, "12345678901", "+5565999999999", "pessoa@example.com", "1990-01-01",
+      "12345678900", "raw-job-payload", "approved-secret", "payload_json", "pre_approval_status", "secrets",
+    ]) assert.strictEqual(serialized.includes(forbidden), false, `resposta não pode conter ${forbidden}`);
+
+    const callsBeforeInvalidLimit = mock.state.requests.length;
+    response = await requestCreditOperations(crm.baseUrl, sessions.admin, "?limit=0");
+    assert.strictEqual(response.status, 400);
+    assert.strictEqual(mock.state.requests.length, callsBeforeInvalidLimit);
+
+    mock.state.mode = "redirect";
+    response = await requestCreditOperations(crm.baseUrl, sessions.admin);
+    assert.strictEqual(response.status, 503);
+    assert.strictEqual(mock.state.redirectHits, 0, "redirect upstream não deve ser seguido");
+
+    mock.state.mode = "writable-contract";
+    response = await requestCreditOperations(crm.baseUrl, sessions.admin);
+    assert.strictEqual(response.status, 503, "readOnly=false deve ser rejeitado");
+
+    mock.state.mode = "upstream-error";
+    response = await requestCreditOperations(crm.baseUrl, sessions.admin);
+    assert.strictEqual(response.status, 503);
+    assert.deepStrictEqual(response.body, { error: "Não foi possível consultar a central de crédito" });
+    assert.strictEqual(JSON.stringify(response.body).includes(upstreamToken), false);
 
     const html = fs.readFileSync(path.join(root, "src", "index.html"), "utf8");
     const script = fs.readFileSync(path.join(root, "src", "script.js"), "utf8");
+    const serverSource = fs.readFileSync(path.join(root, "src", "server.js"), "utf8");
     assert(html.includes('id="credit-nav-item" class="nav-item is-hidden" data-view="credit"'));
-    assert(html.indexOf("credit-nav-item") > html.indexOf('data-view="tutorials"'));
-    assert(html.indexOf("credit-nav-item") < html.indexOf("sidebar-spacer"));
-    assert(html.includes('id="view-credit" class="view"'));
-    assert(script.includes('function updateCreditNavigation()'));
-    assert(script.includes('hasPermission("credit:monitor")'));
+    assert(html.includes('id="credit-operation-drawer" class="drawer credit-detail-drawer"'));
+    assert(html.includes("SOMENTE LEITURA"));
     assert(script.includes('apiRequest("/api/credit/operations")'));
+    assert(script.includes('"Nenhuma análise disponível ainda."'));
+    assert(script.includes('"Não foi possível carregar a central de crédito."'));
+    assert(script.includes("function openCreditOperationDetail(operation)"));
+    assert(script.includes("credit-operation-row"));
+    assert.strictEqual(/app\.(post|put|patch|delete)\(\s*["']\/api\/credit\//i.test(serverSource), false);
 
-    console.log("CRM credit operations panel RBAC and contract tests: OK");
+    console.log("CRM credit operations read-only gateway, RBAC, PII and UI tests: OK");
   } finally {
-    await stopServer(child);
+    await stopServer(crm?.child);
+    if (mock) await mock.close();
     fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 })().catch((error) => {

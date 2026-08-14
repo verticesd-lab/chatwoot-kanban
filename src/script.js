@@ -93,6 +93,7 @@ const state = {
     },
     items: [],
     loading: false,
+    error: false,
   },
   reactivation: {
     configuration: null,
@@ -3411,6 +3412,154 @@ function updateCreditNavigation() {
   elements.creditNavItem?.classList.toggle("is-hidden", !allowed);
 }
 
+const CREDIT_STATUS_LABELS = {
+  queued: "Na fila",
+  processing: "Em análise",
+  waiting_input: "Aguardando informação",
+  ready: "Pronto para análise",
+  available: "Oportunidade encontrada",
+  completed: "Concluído",
+  blocked: "Bloqueado",
+  attention_required: "Exige atenção",
+  failed: "Falha",
+  unavailable: "Sem oportunidade",
+};
+
+const CREDIT_ACTION_LABELS = {
+  collect_cpf: "Coletar CPF",
+  collect_birth_date: "Coletar data de nascimento",
+  collect_phone: "Coletar telefone",
+  collect_email: "Coletar e-mail",
+  collect_cnh: "Coletar CNH",
+  collect_down_payment: "Informar entrada",
+  provide_missing_fields: "Solicitar informações pendentes",
+  review: "Revisar análise",
+  retry: "Aguardar nova tentativa",
+};
+
+const CREDIT_FIELD_LABELS = {
+  cpf: "CPF",
+  birth_date: "Data de nascimento",
+  birthdate: "Data de nascimento",
+  phone: "Telefone",
+  email: "E-mail",
+  cnh: "CNH",
+  down_payment: "Entrada",
+};
+
+function creditStatusLabel(status) {
+  return CREDIT_STATUS_LABELS[status] || "Status não identificado";
+}
+
+function creditActionLabel(action) {
+  if (!action) return "Nenhuma";
+  return CREDIT_ACTION_LABELS[action] || "Ação pendente";
+}
+
+function creditDownPaymentLabel(downPayment) {
+  if (downPayment?.known !== true) return "Não informada";
+  if (downPayment.cents === 0) return "Sem entrada";
+  return formatCurrency(Number(downPayment.cents || 0) / 100);
+}
+
+function creditAvailableLabel(value) {
+  if (value === true) return "Sim";
+  if (value === false) return "Não";
+  return "Não informado";
+}
+
+function appendCreditDetailSection(title, entries) {
+  const section = createElement("section", "drawer-section credit-detail-section");
+  section.appendChild(createElement("h3", null, title));
+  const list = createElement("dl", "credit-detail-list");
+  for (const [label, value] of entries) {
+    const row = createElement("div", "credit-detail-row");
+    row.append(createElement("dt", null, label), createElement("dd", null, value ?? "—"));
+    list.appendChild(row);
+  }
+  section.appendChild(list);
+  elements.creditDetailBody.appendChild(section);
+}
+
+function openCreditOperationDetail(operation) {
+  if (!operation || !elements.creditOperationDrawer) return;
+  elements.creditDetailConversation.textContent = `CONVERSA #${operation.conversationId}`;
+  elements.creditDetailTitle.textContent = "Operação de crédito";
+  elements.creditDetailMeta.textContent = `${creditStatusLabel(operation.status)} · tentativa ${operation.applicantAttempt || 0}`;
+  elements.creditDetailBody.replaceChildren();
+
+  appendCreditDetailSection("Identificação", [
+    ["Conversa", operation.conversationId],
+    ["Tentativa", operation.applicantAttempt || 0],
+    ["Status", creditStatusLabel(operation.status)],
+    ["Final do CPF", operation.cpfLast4 ? `Final ${operation.cpfLast4}` : "Não informado"],
+  ]);
+  const facts = operation.facts || {};
+  appendCreditDetailSection("Dados coletados", [
+    ["CPF presente", facts.cpfPresent ? "Sim" : "Não"],
+    ["Nascimento presente", facts.birthDatePresent ? "Sim" : "Não"],
+    ["Telefone presente", facts.phonePresent ? "Sim" : "Não"],
+    ["E-mail presente", facts.emailPresent ? "Sim" : "Não"],
+    ["CNH presente", facts.cnhPresent ? "Sim" : "Não"],
+    ["Entrada", creditDownPaymentLabel(facts.downPayment)],
+  ]);
+  appendCreditDetailSection("Estado", [
+    ["State UUID", operation.stateUuid || "—"],
+    ["Revisão", operation.revision || 0],
+    ["Criado em", formatDate(operation.createdAt)],
+    ["Atualizado em", formatDate(operation.updatedAt)],
+  ]);
+
+  const banksSection = createElement("section", "drawer-section credit-detail-section");
+  banksSection.appendChild(createElement("h3", null, "Bancos"));
+  const banks = Array.isArray(operation.banks) ? operation.banks : [];
+  if (!banks.length) {
+    banksSection.appendChild(createElement("p", "muted", "Nenhum banco informado."));
+  } else {
+    const bankList = createElement("div", "credit-bank-detail-list");
+    for (const bank of banks) {
+      const card = createElement("article", "credit-bank-detail");
+      card.appendChild(createElement("strong", null, bank.name ? `${bank.name} (${bank.code})` : bank.code));
+      const missingFields = Array.isArray(bank.missingFields) && bank.missingFields.length
+        ? bank.missingFields.map((field) => CREDIT_FIELD_LABELS[field] || "Campo pendente").join(", ")
+        : "Nenhum";
+      const details = createElement("dl", "credit-detail-list");
+      for (const [label, value] of [
+        ["Status", creditStatusLabel(bank.status)],
+        ["Disponível", creditAvailableLabel(bank.available)],
+        ["Campos pendentes", missingFields],
+      ]) {
+        const row = createElement("div", "credit-detail-row");
+        row.append(createElement("dt", null, label), createElement("dd", null, value));
+        details.appendChild(row);
+      }
+      card.appendChild(details);
+      bankList.appendChild(card);
+    }
+    banksSection.appendChild(bankList);
+  }
+  elements.creditDetailBody.appendChild(banksSection);
+
+  const job = operation.job;
+  appendCreditDetailSection("Job", job ? [
+    ["Tipo", job.type],
+    ["Status", creditStatusLabel(job.status)],
+    ["Tentativas", `${job.attempts}/${job.maxAttempts}`],
+    ["Atualizado em", formatDate(job.updatedAt)],
+  ] : [["Situação", "Não informado"]]);
+  appendCreditDetailSection("Próxima ação", [["Ação", creditActionLabel(operation.nextAction)]]);
+
+  elements.creditOperationDrawer.classList.add("is-open");
+  elements.creditOperationDrawer.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+}
+
+function closeCreditOperationDetail() {
+  elements.creditOperationDrawer?.classList.remove("is-open");
+  elements.creditOperationDrawer?.setAttribute("aria-hidden", "true");
+  document.body.style.overflow = "";
+}
+
 function renderCreditOperations() {
   const metrics = state.credit.metrics || {};
   if (elements.creditMetricCpfCollectedToday) {
@@ -3425,11 +3574,59 @@ function renderCreditOperations() {
   if (elements.creditMetricAttentionRequired) {
     elements.creditMetricAttentionRequired.textContent = String(Math.max(0, Number(metrics.attentionRequired) || 0));
   }
+  if (!elements.creditOperationsList) return;
+  elements.creditOperationsList.replaceChildren();
+  if (state.credit.loading) {
+    elements.creditOperationsList.className = "credit-empty-state credit-loading-state";
+    elements.creditOperationsList.append(
+      createElement("strong", null, "Carregando análises…"),
+      createElement("span", null, "Consultando a central de crédito.")
+    );
+    return;
+  }
+  if (state.credit.error) {
+    elements.creditOperationsList.className = "credit-empty-state credit-error-state";
+    elements.creditOperationsList.appendChild(createElement("strong", null, "Não foi possível carregar a central de crédito."));
+    return;
+  }
+  if (!state.credit.items.length) {
+    elements.creditOperationsList.className = "credit-empty-state";
+    elements.creditOperationsList.appendChild(createElement("strong", null, "Nenhuma análise disponível ainda."));
+    return;
+  }
+
+  elements.creditOperationsList.className = "credit-operations-list";
+  for (const operation of state.credit.items) {
+    const row = createElement("button", "credit-operation-row");
+    row.type = "button";
+    row.setAttribute("aria-label", `Abrir detalhes da conversa ${operation.conversationId}`);
+    const fields = [
+      ["Conversa", `#${operation.conversationId}`],
+      ["Tentativa", operation.applicantAttempt || 0],
+      ["Status", creditStatusLabel(operation.status), `credit-status credit-status-${operation.status}`],
+      ["CPF", operation.cpfLast4 ? `Final ${operation.cpfLast4}` : "Não informado"],
+      ["Entrada", creditDownPaymentLabel(operation.facts?.downPayment)],
+      ["Bancos", (operation.banks || []).length
+        ? operation.banks.map((bank) => `${bank.name || bank.code}: ${creditStatusLabel(bank.status)}`).join(" · ")
+        : "Nenhum"],
+      ["Próxima ação", creditActionLabel(operation.nextAction)],
+      ["Atualização", formatDate(operation.updatedAt)],
+    ];
+    for (const [label, value, className] of fields) {
+      const field = createElement("span", "credit-operation-field");
+      field.append(createElement("small", null, label), createElement("strong", className || null, value));
+      row.appendChild(field);
+    }
+    row.addEventListener("click", () => openCreditOperationDetail(operation));
+    elements.creditOperationsList.appendChild(row);
+  }
 }
 
 async function loadCreditOperations(options = {}) {
   if (!hasPermission("credit:monitor") || state.credit.loading) return;
   state.credit.loading = true;
+  state.credit.error = false;
+  renderCreditOperations();
   try {
     const response = await apiRequest("/api/credit/operations");
     state.credit = {
@@ -3438,12 +3635,16 @@ async function loadCreditOperations(options = {}) {
       metrics: response?.metrics || {},
       items: Array.isArray(response?.items) ? response.items : [],
       loading: false,
+      error: false,
     };
     renderCreditOperations();
-  } catch (error) {
-    if (!options.silent) showToast(`Não foi possível carregar a central de crédito: ${error.message}`, "error");
+  } catch (_error) {
+    state.credit.error = true;
+    state.credit.items = [];
+    if (!options.silent) showToast("Não foi possível carregar a central de crédito.", "error");
   } finally {
     state.credit.loading = false;
+    renderCreditOperations();
   }
 }
 
@@ -5085,6 +5286,11 @@ function cacheElements() {
     creditMetricWaitingInput: byId("credit-metric-waiting-input"),
     creditMetricAttentionRequired: byId("credit-metric-attention-required"),
     creditOperationsList: byId("credit-operations-list"),
+    creditOperationDrawer: byId("credit-operation-drawer"),
+    creditDetailConversation: byId("credit-detail-conversation"),
+    creditDetailTitle: byId("credit-detail-title"),
+    creditDetailMeta: byId("credit-detail-meta"),
+    creditDetailBody: byId("credit-detail-body"),
     reactivationNavItem: byId("reactivation-nav-item"),
     reactivationNavCount: byId("reactivation-nav-count"),
     reactivationRefresh: byId("reactivation-refresh"),
@@ -5457,6 +5663,9 @@ function bindEvents() {
 
   document.querySelectorAll("[data-close-drawer]").forEach((element) => {
     element.addEventListener("click", closeOpportunityDrawer);
+  });
+  document.querySelectorAll("[data-close-credit-detail]").forEach((element) => {
+    element.addEventListener("click", closeCreditOperationDetail);
   });
 
   document.querySelectorAll(".nav-item[data-view]").forEach((button) => {

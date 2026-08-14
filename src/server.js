@@ -10,6 +10,7 @@ const access = require("./access-control");
 const suppression = require("./contact-suppression");
 const reactivation = require("./reactivation");
 const reactivationScope = require("./reactivation-scope");
+const autocoreCredit = require("./autocore-credit");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -941,18 +942,22 @@ app.get(
   "/api/credit/operations",
   requireSession,
   requirePermission("credit:monitor"),
-  (_req, res) => {
-    return res.json({
-      enabled: false,
-      readOnly: true,
-      metrics: {
-        cpfCollectedToday: 0,
-        processing: 0,
-        waitingInput: 0,
-        attentionRequired: 0,
-      },
-      items: [],
-    });
+  async (req, res) => {
+    if (!autocoreCredit.creditPanelEnabled()) {
+      return res.json(autocoreCredit.emptyCreditOperations());
+    }
+    let limit;
+    try {
+      limit = autocoreCredit.parseLimit(req.query.limit);
+    } catch (_error) {
+      return res.status(400).json({ error: "Limite inválido" });
+    }
+    try {
+      const operations = await autocoreCredit.fetchCreditOperations({ limit });
+      return res.json(operations);
+    } catch (_error) {
+      return res.status(503).json({ error: "Não foi possível consultar a central de crédito" });
+    }
   }
 );
 
