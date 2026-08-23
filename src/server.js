@@ -21,6 +21,9 @@ const loginAttempts = new Map();
 const REACTIVATION_CONFIG = reactivation.reactivationConfig(process.env);
 const CHATWOOT_RESOLVED_ARCHIVE_ENABLED =
   String(process.env.CHATWOOT_RESOLVED_ARCHIVE_ENABLED || "false").trim().toLowerCase() === "true";
+const CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF = CHATWOOT_RESOLVED_ARCHIVE_ENABLED
+  ? suppression.parseHistoricalCutoff(process.env.CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF)
+  : null;
 let reactivationWorkerBusy = false;
 
 function normalizeBaseUrl(value) {
@@ -1432,6 +1435,7 @@ app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => 
       return suppression.classifyWorkspaceConversation(conversation, {
         manuallyArchived,
         contactSuppressed,
+        historicalCutoff: CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF,
       }) === "chatwoot_resolved";
     });
     const activeConversations = scopedConversations.filter((conversation) => {
@@ -1455,6 +1459,7 @@ app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => 
           return {
             manuallyArchived,
             contactSuppressed: Boolean(contactKey && archivedContactKeys.has(contactKey)),
+            historicalCutoff: CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF,
           };
         })
       : null;

@@ -144,6 +144,8 @@ module.exports = {
   isSdrQueueConversation,
   hasConversationAccess,
   filterConversationsForSession,
+  taskStatus,
+  activityTimestamp,
   operationalPriority,
   sortOperationalQueue,
 };

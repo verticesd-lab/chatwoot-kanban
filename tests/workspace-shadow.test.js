@@ -10,15 +10,21 @@ const { DatabaseSync } = require("node:sqlite");
 const root = path.resolve(__dirname, "..");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-workspace-shadow-test-"));
 const databasePath = path.join(tempDir, "crm.sqlite");
+const oldActivityAt = Math.floor((Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000);
+const recentActivityAt = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000);
+const historicalCutoff = "2026-08-07T00:00:00-04:00";
+const historicalActivityAt = Math.floor(Date.parse("2026-08-06T23:59:59-04:00") / 1000);
 
 const conversations = [
-  { id: 101, status: "resolved", labels: [], meta: { sender: { phone_number: "+55 65 90000-0101" } } },
-  { id: 102, status: "resolved", labels: [], meta: { sender: { phone_number: "+55 65 90000-0102" } } },
-  { id: 103, status: "resolved", labels: [], meta: { sender: { phone_number: "+55 65 90000-0103" } } },
+  { id: 101, status: "resolved", last_activity_at: oldActivityAt, labels: [], meta: { sender: { phone_number: "+55 65 90000-0101" } } },
+  { id: 102, status: "resolved", last_activity_at: oldActivityAt, labels: [], meta: { sender: { phone_number: "+55 65 90000-0102" } } },
+  { id: 103, status: "resolved", last_activity_at: oldActivityAt, labels: [], meta: { sender: { phone_number: "+55 65 90000-0103" } } },
   { id: 104, status: "open", labels: [], meta: { sender: { phone_number: "5565900000103" } } },
   { id: 105, status: "open", labels: [], meta: { sender: { phone_number: "+55 65 90000-0105" } } },
   { id: 106, status: "pending", labels: [], meta: { sender: { phone_number: "+55 65 90000-0106" } } },
   { id: 107, status: "snoozed", labels: [], meta: { sender: { phone_number: "+55 65 90000-0107" } } },
+  { id: 108, status: "resolved", last_activity_at: recentActivityAt, labels: [], meta: { sender: { phone_number: "+55 65 90000-0108" } } },
+  { id: 109, status: "resolved", last_activity_at: historicalActivityAt, labels: [], custom_attributes: { crm_stage: "contacted" }, meta: { sender: { phone_number: "+55 65 90000-0109" } } },
 ];
 
 function availablePort() {
@@ -145,14 +151,17 @@ function ids(items) {
     });
     db.closeDatabase();
 
-    let crm = await startCrm({ CHATWOOT_RESOLVED_ARCHIVE_ENABLED: "false" });
+    let crm = await startCrm({
+      CHATWOOT_RESOLVED_ARCHIVE_ENABLED: "false",
+      CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF: historicalCutoff,
+    });
     child = crm.child;
     const body = await requestWorkspace(crm.baseUrl, token);
 
     assert.deepStrictEqual(ids(body.chatwootResolvedConversations), [101]);
     assert.deepStrictEqual(
       ids(body.conversations),
-      [101, 105, 106, 107],
+      [101, 105, 106, 107, 108, 109],
       "array ativo deve preservar a selecao legada, inclusive conversa resolved"
     );
     assert.deepStrictEqual(
@@ -171,15 +180,21 @@ function ids(items) {
 
     await stopServer(child);
     child = null;
-    crm = await startCrm({ CHATWOOT_RESOLVED_ARCHIVE_ENABLED: "true" });
+    crm = await startCrm({
+      CHATWOOT_RESOLVED_ARCHIVE_ENABLED: "true",
+      CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF: historicalCutoff,
+    });
     child = crm.child;
     const enabledBody = await requestWorkspace(crm.baseUrl, token);
-    assert.deepStrictEqual(ids(enabledBody.conversations), [105, 106, 107]);
-    assert.deepStrictEqual(ids(enabledBody.archivedConversations), [101, 102, 104]);
+    assert.deepStrictEqual(ids(enabledBody.conversations), [105, 106, 107, 108]);
+    assert.deepStrictEqual(ids(enabledBody.archivedConversations), [101, 102, 104, 109]);
 
     const resolvedArchive = enabledBody.archivedConversations.find((item) => Number(item.id) === 101);
     assert.strictEqual(resolvedArchive.archiveSource, "chatwoot_resolved");
     assert.strictEqual(resolvedArchive.crm_archive, undefined);
+    const historicalArchive = enabledBody.archivedConversations.find((item) => Number(item.id) === 109);
+    assert.strictEqual(historicalArchive.archiveSource, "chatwoot_resolved");
+    assert.strictEqual(historicalArchive.crm_archive, undefined);
     const manualArchive = enabledBody.archivedConversations.find((item) => Number(item.id) === 102);
     assert.strictEqual(manualArchive.archiveSource, "manual");
     assert.strictEqual(manualArchive.crm_archive.reason, "Duplicado");

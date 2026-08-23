@@ -76,6 +76,16 @@ const explicitContactArchive = [
 const explicitKeys = suppression.archivedContactKeys(conversations, explicitContactArchive);
 assert(explicitKeys.has(suppression.contactIdentity(conversations.find((item) => item.id === 301))));
 
+const CLASSIFICATION_NOW = Date.parse("2026-08-23T12:00:00.000Z");
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HISTORICAL_CUTOFF = "2026-08-07T00:00:00-04:00";
+const HISTORICAL_CUTOFF_MS = Date.parse(HISTORICAL_CUTOFF);
+const oldResolvedConversation = (attributes = {}) => ({
+  status: "resolved",
+  last_activity_at: new Date(CLASSIFICATION_NOW - 8 * DAY_MS).toISOString(),
+  ...attributes,
+});
+
 const classificationCases = [
   [{ status: "open" }, {}, "active"],
   [{ status: "pending" }, {}, "active"],
@@ -83,7 +93,7 @@ const classificationCases = [
   [{}, {}, "active"],
   [{ status: "unknown" }, {}, "active"],
   [{ status: "Resolved" }, {}, "active"],
-  [{ status: "resolved" }, {}, "chatwoot_resolved"],
+  [oldResolvedConversation(), { now: CLASSIFICATION_NOW }, "chatwoot_resolved"],
   [{ status: "resolved" }, { manuallyArchived: true }, "manual_archive"],
   [{ status: "resolved" }, { contactSuppressed: true }, "contact_suppressed"],
   [
@@ -102,13 +112,277 @@ for (const [conversation, flags, expected] of classificationCases) {
   );
 }
 
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(CLASSIFICATION_NOW - DAY_MS).toISOString(),
+    },
+    { now: CLASSIFICATION_NOW }
+  ),
+  "active",
+  "resolved com um dia deve permanecer ativa"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(CLASSIFICATION_NOW - 7 * DAY_MS).toISOString(),
+    },
+    { now: CLASSIFICATION_NOW }
+  ),
+  "active",
+  "resolved exatamente no limite de sete dias deve permanecer ativa"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(CLASSIFICATION_NOW - 7 * DAY_MS - 1).toISOString(),
+    },
+    { now: CLASSIFICATION_NOW }
+  ),
+  "chatwoot_resolved",
+  "resolved com mais de sete dias e sem protecao deve ir ao arquivo derivado"
+);
+
+for (const stage of [
+  "contacted",
+  "qualification",
+  "proposal",
+  "negotiation",
+  "nova_tentativa_cpf",
+  "analise_manual",
+  "credito_aprovado",
+  "sem_resposta_follow_up",
+  "sem_resposta_followup",
+]) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(
+      oldResolvedConversation({ custom_attributes: { crm_stage: stage } }),
+      { now: CLASSIFICATION_NOW }
+    ),
+    "active",
+    `stage operacional ${stage} deve proteger a oportunidade`
+  );
+}
+
+for (const stage of [undefined, "new"]) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(
+      oldResolvedConversation({ custom_attributes: { crm_stage: stage } }),
+      { now: CLASSIFICATION_NOW }
+    ),
+    "chatwoot_resolved",
+    `${stage || "stage ausente"} sozinho nao deve proteger oportunidade antiga`
+  );
+}
+
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    oldResolvedConversation({
+      custom_attributes: { fase_qualificacao: "aguardando_cpf_terceiro" },
+    }),
+    { now: CLASSIFICATION_NOW }
+  ),
+  "active",
+  "fase de qualificacao aguardando deve proteger a oportunidade"
+);
+
+for (const crmTaskDueAt of ["2026-08-01", "2026-09-01"]) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(
+      oldResolvedConversation({
+        custom_attributes: {
+          crm_next_task: "Retornar cliente",
+          crm_task_due_at: crmTaskDueAt,
+          crm_task_done: false,
+        },
+      }),
+      { now: CLASSIFICATION_NOW }
+    ),
+    "active",
+    "tarefa comercial vencida ou pendente deve proteger a oportunidade"
+  );
+}
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    oldResolvedConversation({
+      custom_attributes: {
+        crm_next_task: "Retornar cliente",
+        crm_task_due_at: "2026-08-01",
+        crm_task_done: true,
+      },
+    }),
+    { now: CLASSIFICATION_NOW }
+  ),
+  "chatwoot_resolved",
+  "tarefa concluida nao deve proteger oportunidade antiga sozinha"
+);
+
+for (const label of [
+  "precisa-humano",
+  "atendimento-manual",
+  "aguardando-analise-manual",
+  "aguardando-cpf-terceiro",
+  "aguardando-retorno-cliente",
+  "lead-com-sdr",
+]) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(
+      oldResolvedConversation({ labels: [label] }),
+      { now: CLASSIFICATION_NOW }
+    ),
+    "active",
+    `label operacional ${label} deve proteger a oportunidade`
+  );
+}
+
+for (const label of [
+  "fora-de-horario",
+  "lead-frio-sem-resposta",
+  "reativacao-unica-enviada",
+  "followup-bloqueado",
+]) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(
+      oldResolvedConversation({ labels: [label] }),
+      { now: CLASSIFICATION_NOW }
+    ),
+    "chatwoot_resolved",
+    `label ${label} isolada nao deve proteger oportunidade antiga`
+  );
+}
+
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      updated_at: new Date(CLASSIFICATION_NOW - 8 * DAY_MS).toISOString(),
+    },
+    { now: CLASSIFICATION_NOW }
+  ),
+  "chatwoot_resolved",
+  "updated_at deve ser o fallback quando last_activity_at estiver ausente"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      created_at: new Date(CLASSIFICATION_NOW - 8 * DAY_MS).toISOString(),
+    },
+    { now: CLASSIFICATION_NOW }
+  ),
+  "chatwoot_resolved",
+  "created_at deve ser o fallback quando os demais timestamps estiverem ausentes"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation({ status: "resolved" }, { now: CLASSIFICATION_NOW }),
+  "active",
+  "sem timestamp nao e seguro afirmar que a atividade passou de sete dias"
+);
+
+assert.strictEqual(suppression.parseHistoricalCutoff(""), null);
+assert.strictEqual(suppression.parseHistoricalCutoff(HISTORICAL_CUTOFF), HISTORICAL_CUTOFF_MS);
+assert.throws(
+  () => suppression.parseHistoricalCutoff("2026-08-07"),
+  /timezone explicito/,
+  "cutoff date-only nao pode depender do timezone do processo"
+);
+
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(HISTORICAL_CUTOFF_MS - 1).toISOString(),
+      custom_attributes: { crm_stage: "contacted" },
+    },
+    { now: CLASSIFICATION_NOW, historicalCutoff: HISTORICAL_CUTOFF }
+  ),
+  "chatwoot_resolved",
+  "resolved anterior ao cutoff deve usar a regra historica"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      created_at: "2026-08-01T12:00:00.000Z",
+      last_activity_at: "2026-08-20T12:00:00.000Z",
+    },
+    { now: CLASSIFICATION_NOW, historicalCutoff: HISTORICAL_CUTOFF }
+  ),
+  "active",
+  "criacao anterior nao prevalece sobre atividade posterior ao cutoff"
+);
+for (const status of ["open", "pending", "snoozed"]) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(
+      {
+        status,
+        last_activity_at: new Date(HISTORICAL_CUTOFF_MS - DAY_MS).toISOString(),
+      },
+      { now: CLASSIFICATION_NOW, historicalCutoff: HISTORICAL_CUTOFF }
+    ),
+    "active",
+    `${status} antiga nunca deve entrar no arquivo historico`
+  );
+}
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(HISTORICAL_CUTOFF_MS).toISOString(),
+      custom_attributes: { crm_stage: "contacted" },
+    },
+    { now: CLASSIFICATION_NOW, historicalCutoff: HISTORICAL_CUTOFF }
+  ),
+  "active",
+  "atividade exatamente no cutoff nao pertence ao historico"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(HISTORICAL_CUTOFF_MS - DAY_MS).toISOString(),
+    },
+    {
+      now: CLASSIFICATION_NOW,
+      historicalCutoff: HISTORICAL_CUTOFF,
+      manuallyArchived: true,
+    }
+  ),
+  "manual_archive"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    {
+      status: "resolved",
+      last_activity_at: new Date(HISTORICAL_CUTOFF_MS - DAY_MS).toISOString(),
+    },
+    {
+      now: CLASSIFICATION_NOW,
+      historicalCutoff: HISTORICAL_CUTOFF,
+      contactSuppressed: true,
+    }
+  ),
+  "contact_suppressed"
+);
+assert.strictEqual(
+  suppression.classifyWorkspaceConversation(
+    oldResolvedConversation(),
+    { now: CLASSIFICATION_NOW, historicalCutoff: HISTORICAL_CUTOFF }
+  ),
+  "chatwoot_resolved",
+  "atividade apos o cutoff deve continuar usando o safe predicate"
+);
+
 const bucketInput = [
   { id: 1, status: "open" },
   { id: 2, status: "pending" },
   { id: 3, status: "snoozed" },
   { id: 4 },
   { id: 5, status: "unknown" },
-  { id: 6, status: "resolved" },
+  { id: 6, ...oldResolvedConversation() },
   { id: 7, status: "resolved" },
   { id: 8, status: "resolved" },
   { id: 9, status: "open" },
@@ -123,7 +397,7 @@ const bucketFlags = new Map([
 const bucketInputSnapshot = JSON.stringify(bucketInput);
 const buckets = suppression.bucketWorkspaceConversations(
   bucketInput,
-  (conversation) => bucketFlags.get(conversation.id) || {}
+  (conversation) => ({ now: CLASSIFICATION_NOW, ...(bucketFlags.get(conversation.id) || {}) })
 );
 
 assert.deepStrictEqual(buckets.active.map((item) => item.id), [1, 2, 3, 4, 5]);
@@ -146,11 +420,11 @@ for (const conversation of bucketInput) {
   );
 }
 
-const duplicateConversation = { id: 20, status: "resolved" };
+const duplicateConversation = { id: 20, ...oldResolvedConversation() };
 const duplicateBuckets = suppression.bucketWorkspaceConversations([
   duplicateConversation,
   duplicateConversation,
-]);
+], () => ({ now: CLASSIFICATION_NOW }));
 assert.deepStrictEqual(duplicateBuckets.chatwootResolved, [duplicateConversation, duplicateConversation]);
 assert.strictEqual(
   Object.values(duplicateBuckets).reduce((total, items) => total + items.length, 0),
@@ -158,7 +432,10 @@ assert.strictEqual(
   "IDs duplicados devem preservar a multiplicidade da entrada"
 );
 
-const resolvedRun = suppression.bucketWorkspaceConversations([{ id: 30, status: "resolved" }]);
+const resolvedRun = suppression.bucketWorkspaceConversations(
+  [{ id: 30, ...oldResolvedConversation() }],
+  () => ({ now: CLASSIFICATION_NOW })
+);
 const reopenedRun = suppression.bucketWorkspaceConversations([{ id: 30, status: "open" }]);
 const pendingRun = suppression.bucketWorkspaceConversations([{ id: 30, status: "pending" }]);
 assert.deepStrictEqual(resolvedRun.chatwootResolved.map((item) => item.id), [30]);
