@@ -19,6 +19,8 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
 const loginAttempts = new Map();
 const REACTIVATION_CONFIG = reactivation.reactivationConfig(process.env);
+const CHATWOOT_RESOLVED_ARCHIVE_ENABLED =
+  String(process.env.CHATWOOT_RESOLVED_ARCHIVE_ENABLED || "false").trim().toLowerCase() === "true";
 let reactivationWorkerBusy = false;
 
 function normalizeBaseUrl(value) {
@@ -1423,6 +1425,15 @@ app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => 
       allConversations,
       archivedItems
     );
+    const chatwootResolvedConversations = scopedConversations.filter((conversation) => {
+      const manuallyArchived = archivedByConversation.has(Number(conversation.id));
+      const contactKey = suppression.contactIdentity(conversation);
+      const contactSuppressed = Boolean(contactKey && archivedContactKeys.has(contactKey));
+      return suppression.classifyWorkspaceConversation(conversation, {
+        manuallyArchived,
+        contactSuppressed,
+      }) === "chatwoot_resolved";
+    });
     const activeConversations = scopedConversations.filter((conversation) => {
       if (archivedByConversation.has(Number(conversation.id))) return false;
       const contactKey = suppression.contactIdentity(conversation);
@@ -1437,11 +1448,38 @@ app.get("/api/crm/workspace/conversations", requireSession, async (req, res) => 
             crm_archive: archivedByConversation.get(Number(conversation.id)),
           }))
       : [];
-    const sortedConversations = access.sortOperationalQueue(activeConversations);
+    const workspaceBuckets = CHATWOOT_RESOLVED_ARCHIVE_ENABLED
+      ? suppression.bucketWorkspaceConversations(scopedConversations, (conversation) => {
+          const manuallyArchived = archivedByConversation.has(Number(conversation.id));
+          const contactKey = suppression.contactIdentity(conversation);
+          return {
+            manuallyArchived,
+            contactSuppressed: Boolean(contactKey && archivedContactKeys.has(contactKey)),
+          };
+        })
+      : null;
+    const returnedActiveConversations = workspaceBuckets
+      ? workspaceBuckets.active
+      : activeConversations;
+    const returnedArchivedConversations = workspaceBuckets && canViewArchive
+      ? [
+          ...workspaceBuckets.manualArchived.map((conversation) => ({
+            ...conversation,
+            crm_archive: archivedByConversation.get(Number(conversation.id)),
+            archiveSource: "manual",
+          })),
+          ...workspaceBuckets.chatwootResolved.map((conversation) => ({
+            ...conversation,
+            archiveSource: "chatwoot_resolved",
+          })),
+        ]
+      : archivedConversations;
+    const sortedConversations = access.sortOperationalQueue(returnedActiveConversations);
     return res.json({
       conversations: sortedConversations,
-      archivedConversations,
-      archivedCount: archivedConversations.length,
+      archivedConversations: returnedArchivedConversations,
+      chatwootResolvedConversations,
+      archivedCount: returnedArchivedConversations.length,
       totalVisible: sortedConversations.length,
       totalOrganization: allConversations.length,
       interventionCount: sortedConversations.filter(access.isInterventionConversation).length,

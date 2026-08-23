@@ -3717,22 +3717,34 @@ function renderArchive() {
   for (const conversation of visible) {
     const sender = getSender(conversation);
     const archive = conversation.crm_archive || {};
+    const isChatwootResolvedArchive = conversation.archiveSource === "chatwoot_resolved";
     const row = createElement("article", "archive-item");
     const info = createElement("div", "archive-item-info");
     info.append(
       createElement("strong", null, sender.name || `Contato #${conversation.id}`),
       createElement("span", null, `${sender.phone_number || sender.email || "Sem contato"} · #${conversation.id}`),
-      createElement("small", null, `${archive.reason || "Sem motivo"} · arquivado por ${archive.archivedByName || "Sistema"} em ${formatDate(archive.archivedAt)}`)
+      createElement(
+        "small",
+        null,
+        isChatwootResolvedArchive
+          ? "Resolvida no Chatwoot"
+          : `${archive.reason || "Sem motivo"} · arquivado por ${archive.archivedByName || "Sistema"} em ${formatDate(archive.archivedAt)}`
+      )
     );
-    if (archive.note) info.appendChild(createElement("p", null, archive.note));
+    if (!isChatwootResolvedArchive && archive.note) {
+      info.appendChild(createElement("p", null, archive.note));
+    }
     const actions = createElement("div", "archive-item-actions");
     const open = createElement("button", "button button-ghost button-small", "Ver histórico");
     open.type = "button";
     open.addEventListener("click", () => openOpportunityDrawer(conversation.id));
-    const restore = createElement("button", "button button-primary button-small", "Restaurar");
-    restore.type = "button";
-    restore.addEventListener("click", () => restoreOpportunity(conversation.id));
-    actions.append(open, restore);
+    actions.appendChild(open);
+    if (!isChatwootResolvedArchive) {
+      const restore = createElement("button", "button button-primary button-small", "Restaurar");
+      restore.type = "button";
+      restore.addEventListener("click", () => restoreOpportunity(conversation.id));
+      actions.appendChild(restore);
+    }
     row.append(info, actions);
     elements.archiveList.appendChild(row);
   }

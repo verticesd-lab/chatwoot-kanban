@@ -76,6 +76,95 @@ const explicitContactArchive = [
 const explicitKeys = suppression.archivedContactKeys(conversations, explicitContactArchive);
 assert(explicitKeys.has(suppression.contactIdentity(conversations.find((item) => item.id === 301))));
 
+const classificationCases = [
+  [{ status: "open" }, {}, "active"],
+  [{ status: "pending" }, {}, "active"],
+  [{ status: "snoozed" }, {}, "active"],
+  [{}, {}, "active"],
+  [{ status: "unknown" }, {}, "active"],
+  [{ status: "Resolved" }, {}, "active"],
+  [{ status: "resolved" }, {}, "chatwoot_resolved"],
+  [{ status: "resolved" }, { manuallyArchived: true }, "manual_archive"],
+  [{ status: "resolved" }, { contactSuppressed: true }, "contact_suppressed"],
+  [
+    { status: "resolved" },
+    { manuallyArchived: true, contactSuppressed: true },
+    "manual_archive",
+  ],
+  [{ status: "open" }, { manuallyArchived: true }, "manual_archive"],
+  [{ status: "open" }, { contactSuppressed: true }, "contact_suppressed"],
+];
+
+for (const [conversation, flags, expected] of classificationCases) {
+  assert.strictEqual(
+    suppression.classifyWorkspaceConversation(conversation, flags),
+    expected
+  );
+}
+
+const bucketInput = [
+  { id: 1, status: "open" },
+  { id: 2, status: "pending" },
+  { id: 3, status: "snoozed" },
+  { id: 4 },
+  { id: 5, status: "unknown" },
+  { id: 6, status: "resolved" },
+  { id: 7, status: "resolved" },
+  { id: 8, status: "resolved" },
+  { id: 9, status: "open" },
+  { id: 10, status: "resolved" },
+];
+const bucketFlags = new Map([
+  [7, { manuallyArchived: true }],
+  [8, { contactSuppressed: true }],
+  [9, { manuallyArchived: true }],
+  [10, { manuallyArchived: true, contactSuppressed: true }],
+]);
+const bucketInputSnapshot = JSON.stringify(bucketInput);
+const buckets = suppression.bucketWorkspaceConversations(
+  bucketInput,
+  (conversation) => bucketFlags.get(conversation.id) || {}
+);
+
+assert.deepStrictEqual(buckets.active.map((item) => item.id), [1, 2, 3, 4, 5]);
+assert.deepStrictEqual(buckets.manualArchived.map((item) => item.id), [7, 9, 10]);
+assert.deepStrictEqual(buckets.contactSuppressed.map((item) => item.id), [8]);
+assert.deepStrictEqual(buckets.chatwootResolved.map((item) => item.id), [6]);
+assert.strictEqual(JSON.stringify(bucketInput), bucketInputSnapshot, "bucketing nao pode alterar a entrada");
+
+const bucketValues = Object.values(buckets);
+assert.strictEqual(
+  bucketValues.reduce((total, items) => total + items.length, 0),
+  bucketInput.length,
+  "a soma dos buckets deve ser igual ao total de entrada"
+);
+for (const conversation of bucketInput) {
+  assert.strictEqual(
+    bucketValues.reduce((total, items) => total + items.filter((item) => item === conversation).length, 0),
+    1,
+    `conversa ${conversation.id} deve aparecer em exatamente um bucket`
+  );
+}
+
+const duplicateConversation = { id: 20, status: "resolved" };
+const duplicateBuckets = suppression.bucketWorkspaceConversations([
+  duplicateConversation,
+  duplicateConversation,
+]);
+assert.deepStrictEqual(duplicateBuckets.chatwootResolved, [duplicateConversation, duplicateConversation]);
+assert.strictEqual(
+  Object.values(duplicateBuckets).reduce((total, items) => total + items.length, 0),
+  2,
+  "IDs duplicados devem preservar a multiplicidade da entrada"
+);
+
+const resolvedRun = suppression.bucketWorkspaceConversations([{ id: 30, status: "resolved" }]);
+const reopenedRun = suppression.bucketWorkspaceConversations([{ id: 30, status: "open" }]);
+const pendingRun = suppression.bucketWorkspaceConversations([{ id: 30, status: "pending" }]);
+assert.deepStrictEqual(resolvedRun.chatwootResolved.map((item) => item.id), [30]);
+assert.deepStrictEqual(reopenedRun.active.map((item) => item.id), [30]);
+assert.deepStrictEqual(pendingRun.active.map((item) => item.id), [30]);
+
 // Persiste o novo escopo no banco e garante que a migração V1.3.5 funciona.
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "crm-suppression-test-"));
 process.env.CRM_DB_PATH = path.join(tempDir, "crm.sqlite");

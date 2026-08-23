@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon --inspect src/server.js",
-    "check": "node --check src/access-control.js && node --check src/contact-suppression.js && node --check src/contact-identity.js && node --check src/reactivation.js && node --check src/reactivation-scope.js && node --check src/autocore-credit.js && node --check src/db.js && node --check src/server.js && node --check src/script.js && node --check tools/mark-must-change-password.js && node --check tests/password-change.test.js && node --check tests/credit-operations-panel.test.js",
-    "test": "node tests/foundation.test.js && node tests/operational-scope.test.js && node tests/operational-control.test.js && node tests/tutorials.test.js && node tests/contact-suppression.test.js && node tests/reactivation-scope.test.js && node tests/reactivation.test.js && node tests/password-change.test.js && node tests/credit-operations-panel.test.js && node tests/static-contract.test.js"
+    "check": "node --check src/access-control.js && node --check src/contact-suppression.js && node --check src/contact-identity.js && node --check src/reactivation.js && node --check src/reactivation-scope.js && node --check src/autocore-credit.js && node --check src/db.js && node --check src/server.js && node --check src/script.js && node --check tools/mark-must-change-password.js && node --check tests/password-change.test.js && node --check tests/credit-operations-panel.test.js && node --check tests/workspace-shadow.test.js && node --check tests/archive-rendering.test.js",
+    "test": "node tests/foundation.test.js && node tests/operational-scope.test.js && node tests/operational-control.test.js && node tests/tutorials.test.js && node tests/contact-suppression.test.js && node tests/workspace-shadow.test.js && node tests/archive-rendering.test.js && node tests/reactivation-scope.test.js && node tests/reactivation.test.js && node tests/password-change.test.js && node tests/credit-operations-panel.test.js && node tests/static-contract.test.js"
   },
   "dependencies": {
     "axios": "^1.4.0",

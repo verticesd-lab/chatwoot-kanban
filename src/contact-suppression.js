@@ -68,9 +68,46 @@ function archivedContactKeys(conversations, archivedItems) {
   return keys;
 }
 
+function classifyWorkspaceConversation(
+  conversation,
+  { manuallyArchived = false, contactSuppressed = false } = {}
+) {
+  if (manuallyArchived) return "manual_archive";
+  if (contactSuppressed) return "contact_suppressed";
+  if (conversation?.status === "resolved") return "chatwoot_resolved";
+  return "active";
+}
+
+function bucketWorkspaceConversations(conversations, flagsForConversation = () => ({})) {
+  const buckets = {
+    active: [],
+    manualArchived: [],
+    contactSuppressed: [],
+    chatwootResolved: [],
+  };
+  const bucketByClassification = {
+    active: "active",
+    manual_archive: "manualArchived",
+    contact_suppressed: "contactSuppressed",
+    chatwoot_resolved: "chatwootResolved",
+  };
+
+  for (const conversation of Array.isArray(conversations) ? conversations : []) {
+    const classification = classifyWorkspaceConversation(
+      conversation,
+      flagsForConversation(conversation) || {}
+    );
+    buckets[bucketByClassification[classification]].push(conversation);
+  }
+
+  return buckets;
+}
+
 module.exports = {
   CONTACT_SCOPE_REASONS,
   contactIdentity,
   isContactScopeArchive,
   archivedContactKeys,
+  classifyWorkspaceConversation,
+  bucketWorkspaceConversations,
 };
