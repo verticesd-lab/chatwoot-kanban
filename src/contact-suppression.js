@@ -6,29 +6,6 @@ const CONTACT_SCOPE_REASONS = new Set([
   "sem valor operacional",
 ]);
 
-const RESOLVED_ARCHIVE_INACTIVITY_MS = 7 * 24 * 60 * 60 * 1000;
-
-const STRONG_OPERATIONAL_STAGES = new Set([
-  "contacted",
-  "qualification",
-  "proposal",
-  "negotiation",
-  "nova_tentativa_cpf",
-  "analise_manual",
-  "credito_aprovado",
-  "sem_resposta_follow_up",
-  "sem_resposta_followup",
-]);
-
-const STRONG_OPERATIONAL_LABELS = new Set([
-  "precisa-humano",
-  "atendimento-manual",
-  "aguardando-analise-manual",
-  "aguardando-cpf-terceiro",
-  "aguardando-retorno-cliente",
-  "lead-com-sdr",
-]);
-
 function normalizeText(value) {
   return String(value || "")
     .trim()
@@ -93,64 +70,24 @@ function archivedContactKeys(conversations, archivedItems) {
   return keys;
 }
 
-function normalizeOperationalLabel(value) {
-  return normalizeText(value)
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
-function hasStrongOperationalSignal(conversation, now = Date.now()) {
-  const attributes = conversation?.custom_attributes || {};
-  const stage = String(attributes.crm_stage || "").trim();
-  if (STRONG_OPERATIONAL_STAGES.has(stage)) return true;
-
-  const qualificationPhase = String(attributes.fase_qualificacao || "").trim().toLowerCase();
-  if (qualificationPhase.startsWith("aguardando_")) return true;
-
-  if (["pending", "overdue"].includes(access.taskStatus(conversation, now))) return true;
-
-  return access.labelNames(conversation).some((label) =>
-    STRONG_OPERATIONAL_LABELS.has(normalizeOperationalLabel(label))
-  );
-}
-
-function isOlderThanResolvedArchiveWindow(conversation, now = Date.now()) {
-  const lastActivityAt = access.activityTimestamp(conversation);
-  return lastActivityAt > 0 && now - lastActivityAt > RESOLVED_ARCHIVE_INACTIVITY_MS;
-}
-
-function parseHistoricalCutoff(value) {
-  if (value === null || value === undefined || String(value).trim() === "") return null;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-
-  const timestamp = String(value).trim();
-  if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(timestamp)) {
-    throw new Error("CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF exige timezone explicito");
+function effectiveWorkspaceStage(conversation, pipelineStages = []) {
+  const customStage = String(conversation?.custom_attributes?.crm_stage || "").trim();
+  if (
+    (Array.isArray(pipelineStages) ? pipelineStages : [])
+      .some((stage) => stage?.id === customStage)
+  ) {
+    return customStage;
   }
-  const parsed = Date.parse(timestamp);
-  if (!Number.isFinite(parsed)) {
-    throw new Error("CHATWOOT_RESOLVED_ARCHIVE_HISTORICAL_CUTOFF invalido");
-  }
-  return parsed;
+
+  const labels = access.labelNames(conversation).map((label) => String(label).toLowerCase());
+  if (labels.some((label) => ["ganho", "won", "venda-fechada"].includes(label))) return "won";
+  if (labels.some((label) => ["perdido", "lost", "sem-interesse"].includes(label))) return "lost";
+  return "new";
 }
 
-function isBeforeHistoricalCutoff(conversation, historicalCutoff = null) {
-  const cutoff = parseHistoricalCutoff(historicalCutoff);
-  if (cutoff === null) return false;
-  const lastActivityAt = access.activityTimestamp(conversation);
-  return lastActivityAt > 0 && lastActivityAt < cutoff;
-}
-
-function shouldClassifyAsChatwootResolved(
-  conversation,
-  now = Date.now(),
-  historicalCutoff = null
-) {
-  if (conversation?.status !== "resolved") return false;
-  if (isBeforeHistoricalCutoff(conversation, historicalCutoff)) return true;
-  return isOlderThanResolvedArchiveWindow(conversation, now) &&
-    !hasStrongOperationalSignal(conversation, now);
+function shouldClassifyAsChatwootResolved(conversation, pipelineStages = []) {
+  return conversation?.status === "resolved" &&
+    effectiveWorkspaceStage(conversation, pipelineStages) === "new";
 }
 
 function classifyWorkspaceConversation(
@@ -158,13 +95,12 @@ function classifyWorkspaceConversation(
   {
     manuallyArchived = false,
     contactSuppressed = false,
-    now = Date.now(),
-    historicalCutoff = null,
+    pipelineStages = [],
   } = {}
 ) {
   if (manuallyArchived) return "manual_archive";
   if (contactSuppressed) return "contact_suppressed";
-  if (shouldClassifyAsChatwootResolved(conversation, now, historicalCutoff)) {
+  if (shouldClassifyAsChatwootResolved(conversation, pipelineStages)) {
     return "chatwoot_resolved";
   }
   return "active";
@@ -200,10 +136,7 @@ module.exports = {
   contactIdentity,
   isContactScopeArchive,
   archivedContactKeys,
-  hasStrongOperationalSignal,
-  isOlderThanResolvedArchiveWindow,
-  parseHistoricalCutoff,
-  isBeforeHistoricalCutoff,
+  effectiveWorkspaceStage,
   shouldClassifyAsChatwootResolved,
   classifyWorkspaceConversation,
   bucketWorkspaceConversations,
