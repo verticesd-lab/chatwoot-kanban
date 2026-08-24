@@ -217,12 +217,128 @@ async function startMockAutoCore() {
       AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "1",
     }), /central de crédito/);
     assert.throws(() => gateway.parseLimit("101"), /central de crédito/);
+    assert.deepStrictEqual(gateway.validateCreditPeriod(), {});
+    assert.deepStrictEqual(
+      gateway.validateCreditPeriod({ from: "2026-08-14T12:00:00Z" }),
+      { from: "2026-08-14T12:00:00Z" },
+      "from-only com timezone Z deve ser aceito intacto"
+    );
+    assert.deepStrictEqual(
+      gateway.validateCreditPeriod({ to: "2026-08-14T12:00:00-03:00" }),
+      { to: "2026-08-14T12:00:00-03:00" },
+      "to-only com timezone negativo deve ser aceito intacto"
+    );
+    assert.deepStrictEqual(
+      gateway.validateCreditPeriod({ from: "2026-08-14T12:00:00+03:00" }),
+      { from: "2026-08-14T12:00:00+03:00" },
+      "timezone positivo deve ser aceito intacto"
+    );
+    assert.deepStrictEqual(
+      gateway.validateCreditPeriod({
+        from: "2026-08-14T12:00:00.123456Z",
+        to: "2026-08-14T10:00:00.123457-03:00",
+      }),
+      {
+        from: "2026-08-14T12:00:00.123456Z",
+        to: "2026-08-14T10:00:00.123457-03:00",
+      },
+      "frações e offsets devem ser comparados e preservados"
+    );
+    assert.deepStrictEqual(
+      gateway.validateCreditPeriod({ from: "2024-02-29T00:00:00Z" }),
+      { from: "2024-02-29T00:00:00Z" },
+      "data bissexta válida deve ser aceita"
+    );
+    for (const fraction of ["1", "123", "123456"]) {
+      const from = `2026-08-14T12:00:00.${fraction}Z`;
+      assert.deepStrictEqual(
+        gateway.validateCreditPeriod({ from }),
+        { from },
+        `fração de ${fraction.length} dígito(s) deve ser aceita`
+      );
+    }
+    const invalidPeriods = [
+      { from: "" },
+      { to: "   " },
+      { from: "2026-08-14T12:00:00" },
+      { from: "2026-02-30T12:00:00Z" },
+      { from: "2026-08-14T12:00:00.1234567Z" },
+      { from: "2026-08-14T12:00:00Z", to: "2026-08-14T12:00:00Z" },
+      { from: "2026-08-14T12:00:00.001Z", to: "2026-08-14T12:00:00Z" },
+      { from: "2026-08-14T12:00:00Z", to: "2026-08-14T09:00:00-03:00" },
+    ];
+    for (const period of invalidPeriods) {
+      assert.throws(
+        () => gateway.validateCreditPeriod(period),
+        (error) => error instanceof gateway.CreditGatewayError && error.code === "INVALID_PERIOD",
+        `período inválido deve produzir INVALID_PERIOD: ${JSON.stringify(period)}`
+      );
+    }
     assert.throws(() => gateway.readCreditConfig({
       CREDIT_PANEL_WRITE_ENABLED: "true",
       AUTOCORE_INTERNAL_BASE_URL: "http://127.0.0.1",
       AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
       AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "1",
     }), /central de crédito/, "write enabled deve falhar fechado");
+
+    const gatewayEnv = {
+      CREDIT_PANEL_WRITE_ENABLED: "false",
+      AUTOCORE_INTERNAL_BASE_URL: "http://127.0.0.1:8080",
+      AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
+      AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "7",
+    };
+    const gatewayRequests = [];
+    const recordingHttpClient = {
+      async get(url, options) {
+        gatewayRequests.push({ url, options });
+        return { data: validUpstreamContract() };
+      },
+    };
+    await gateway.fetchCreditOperations({ limit: 17, env: gatewayEnv, httpClient: recordingHttpClient });
+    assert.deepStrictEqual(
+      gatewayRequests.at(-1).options.params,
+      { store_id: 7, limit: 17 },
+      "gateway legado não deve incluir from/to ausentes"
+    );
+    await gateway.fetchCreditOperations({
+      limit: 17,
+      from: "2026-08-14T12:00:00Z",
+      env: gatewayEnv,
+      httpClient: recordingHttpClient,
+    });
+    assert.deepStrictEqual(
+      gatewayRequests.at(-1).options.params,
+      { store_id: 7, limit: 17, from: "2026-08-14T12:00:00Z" },
+      "gateway deve incluir somente from quando to estiver ausente"
+    );
+    await gateway.fetchCreditOperations({
+      limit: 17,
+      to: "2026-08-14T12:00:00-03:00",
+      env: gatewayEnv,
+      httpClient: recordingHttpClient,
+    });
+    assert.deepStrictEqual(
+      gatewayRequests.at(-1).options.params,
+      { store_id: 7, limit: 17, to: "2026-08-14T12:00:00-03:00" },
+      "gateway deve incluir somente to quando from estiver ausente"
+    );
+    await gateway.fetchCreditOperations({
+      limit: 17,
+      from: "2026-08-14T12:00:00.123Z",
+      to: "2026-08-14T13:00:00.456Z",
+      env: gatewayEnv,
+      httpClient: recordingHttpClient,
+    });
+    assert.deepStrictEqual(
+      gatewayRequests.at(-1).options.params,
+      {
+        store_id: 7,
+        limit: 17,
+        from: "2026-08-14T12:00:00.123Z",
+        to: "2026-08-14T13:00:00.456Z",
+      },
+      "gateway deve encaminhar a janela completa intacta"
+    );
 
     const db = require("../src/db");
     assert.strictEqual(db.bootstrapFromEnv("https://chat.example.com").bootstrapped, true);
@@ -309,6 +425,11 @@ async function startMockAutoCore() {
     assert.strictEqual(capturedUrl.pathname, "/internal/credit/operations");
     assert.strictEqual(capturedUrl.searchParams.get("store_id"), "7");
     assert.strictEqual(capturedUrl.searchParams.get("limit"), "17");
+    assert.deepStrictEqual(
+      [...capturedUrl.searchParams.keys()].sort(),
+      ["limit", "store_id"],
+      "requisição legada deve manter exatamente store_id e limit"
+    );
     assert.strictEqual(response.body.storeId, 7);
     assert.strictEqual(response.body.readOnly, true);
     assert.strictEqual(response.body.items[0].cpfLast4, "4725");
@@ -325,6 +446,64 @@ async function startMockAutoCore() {
       upstreamToken, "12345678901", "+5565999999999", "pessoa@example.com", "1990-01-01",
       "12345678900", "raw-job-payload", "approved-secret", "payload_json", "pre_approval_status", "secrets",
     ]) assert.strictEqual(serialized.includes(forbidden), false, `resposta não pode conter ${forbidden}`);
+
+    const fromOnly = "2026-08-14T12:00:00Z";
+    response = await requestCreditOperations(
+      crm.baseUrl,
+      sessions.admin,
+      `?from=${encodeURIComponent(fromOnly)}`
+    );
+    assert.strictEqual(response.status, 200);
+    const fromOnlyUrl = new URL(mock.state.requests.at(-1).url, mock.baseUrl);
+    assert.strictEqual(fromOnlyUrl.searchParams.get("from"), fromOnly);
+    assert.strictEqual(fromOnlyUrl.searchParams.has("to"), false);
+
+    const toOnly = "2026-08-14T15:00:00+03:00";
+    response = await requestCreditOperations(
+      crm.baseUrl,
+      sessions.admin,
+      `?to=${encodeURIComponent(toOnly)}`
+    );
+    assert.strictEqual(response.status, 200);
+    const toOnlyUrl = new URL(mock.state.requests.at(-1).url, mock.baseUrl);
+    assert.strictEqual(toOnlyUrl.searchParams.has("from"), false);
+    assert.strictEqual(toOnlyUrl.searchParams.get("to"), toOnly);
+
+    const validFrom = "2026-08-14T12:00:00.123456Z";
+    const validTo = "2026-08-14T10:00:00.654321-03:00";
+    response = await requestCreditOperations(
+      crm.baseUrl,
+      sessions.admin,
+      `?limit=17&from=${encodeURIComponent(validFrom)}&to=${encodeURIComponent(validTo)}`
+    );
+    assert.strictEqual(response.status, 200);
+    const periodUrl = new URL(mock.state.requests.at(-1).url, mock.baseUrl);
+    assert.strictEqual(periodUrl.searchParams.get("store_id"), "7");
+    assert.strictEqual(periodUrl.searchParams.get("limit"), "17");
+    assert.strictEqual(periodUrl.searchParams.get("from"), validFrom);
+    assert.strictEqual(periodUrl.searchParams.get("to"), validTo);
+    assert.deepStrictEqual(
+      [...periodUrl.searchParams.keys()].sort(),
+      ["from", "limit", "store_id", "to"],
+      "período válido deve ser encaminhado sem parâmetros extras"
+    );
+
+    const callsBeforeInvalidPeriod = mock.state.requests.length;
+    response = await requestCreditOperations(crm.baseUrl, sessions.admin, "?from=");
+    assert.strictEqual(response.status, 400);
+    assert.deepStrictEqual(response.body, { error: "Período inválido" });
+    response = await requestCreditOperations(
+      crm.baseUrl,
+      sessions.admin,
+      "?from=2026-08-14T12%3A00%3A00"
+    );
+    assert.strictEqual(response.status, 400);
+    assert.deepStrictEqual(response.body, { error: "Período inválido" });
+    assert.strictEqual(
+      mock.state.requests.length,
+      callsBeforeInvalidPeriod,
+      "período inválido não deve alcançar o AutoCore"
+    );
 
     const callsBeforeInvalidLimit = mock.state.requests.length;
     response = await requestCreditOperations(crm.baseUrl, sessions.admin, "?limit=0");

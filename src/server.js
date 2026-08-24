@@ -954,8 +954,22 @@ app.get(
     } catch (_error) {
       return res.status(400).json({ error: "Limite inválido" });
     }
+    let period;
     try {
-      const operations = await autocoreCredit.fetchCreditOperations({ limit });
+      period = autocoreCredit.validateCreditPeriod({
+        from: req.query.from,
+        to: req.query.to,
+      });
+    } catch (error) {
+      if (error instanceof autocoreCredit.CreditGatewayError && error.code === "INVALID_PERIOD") {
+        return res.status(400).json({ error: "Período inválido" });
+      }
+      throw error;
+    }
+    try {
+      const operations = period.from === undefined && period.to === undefined
+        ? await autocoreCredit.fetchCreditOperations({ limit })
+        : await autocoreCredit.fetchCreditOperations({ limit, ...period });
       return res.json(operations);
     } catch (_error) {
       return res.status(503).json({ error: "Não foi possível consultar a central de crédito" });

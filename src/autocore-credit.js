@@ -5,6 +5,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_TEXT_LENGTH = 160;
+const PERIOD_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/;
 
 class CreditGatewayError extends Error {
   constructor(code) {
@@ -40,6 +41,81 @@ function parseLimit(value, fallback = DEFAULT_LIMIT) {
   const parsed = parsePositiveInteger(value);
   if (parsed === null || parsed > 100) throw new CreditGatewayError("INVALID_LIMIT");
   return parsed;
+}
+
+function parsePeriodTimestamp(value) {
+  if (typeof value !== "string") throw new CreditGatewayError("INVALID_PERIOD");
+  const match = PERIOD_TIMESTAMP_PATTERN.exec(value);
+  if (!match) throw new CreditGatewayError("INVALID_PERIOD");
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const fraction = match[7] || "";
+  const timezone = match[8];
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1
+    || month > 12
+    || day < 1
+    || day > daysInMonth[month - 1]
+    || hour > 23
+    || minute > 59
+    || second > 59
+  ) {
+    throw new CreditGatewayError("INVALID_PERIOD");
+  }
+
+  let offsetMinutes = 0;
+  if (timezone !== "Z") {
+    const offsetHour = Number(timezone.slice(1, 3));
+    const offsetMinute = Number(timezone.slice(4, 6));
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+      throw new CreditGatewayError("INVALID_PERIOD");
+    }
+    offsetMinutes = (offsetHour * 60 + offsetMinute) * (timezone[0] === "+" ? 1 : -1);
+  }
+
+  const local = new Date(0);
+  local.setUTCFullYear(year, month - 1, day);
+  local.setUTCHours(hour, minute, second, 0);
+  return {
+    epochSecond: Math.floor(local.getTime() / 1000) - offsetMinutes * 60,
+    fraction,
+  };
+}
+
+function comparePeriodTimestamps(left, right) {
+  if (left.epochSecond !== right.epochSecond) {
+    return left.epochSecond < right.epochSecond ? -1 : 1;
+  }
+  const length = Math.max(left.fraction.length, right.fraction.length);
+  const leftFraction = left.fraction.padEnd(length, "0");
+  const rightFraction = right.fraction.padEnd(length, "0");
+  if (leftFraction === rightFraction) return 0;
+  return leftFraction < rightFraction ? -1 : 1;
+}
+
+function validateCreditPeriod({ from, to } = {}) {
+  const period = {};
+  let parsedFrom;
+  let parsedTo;
+  if (from !== undefined) {
+    parsedFrom = parsePeriodTimestamp(from);
+    period.from = from;
+  }
+  if (to !== undefined) {
+    parsedTo = parsePeriodTimestamp(to);
+    period.to = to;
+  }
+  if (parsedFrom && parsedTo && comparePeriodTimestamps(parsedFrom, parsedTo) >= 0) {
+    throw new CreditGatewayError("INVALID_PERIOD");
+  }
+  return period;
 }
 
 function creditPanelEnabled(env = process.env) {
@@ -209,12 +285,22 @@ function sanitizeCreditOperations(value, configuredStoreId) {
   };
 }
 
-async function fetchCreditOperations({ limit, env = process.env, httpClient = axios } = {}) {
+async function fetchCreditOperations({
+  limit,
+  from,
+  to,
+  env = process.env,
+  httpClient = axios,
+} = {}) {
   const config = readCreditConfig(env);
   const validatedLimit = parseLimit(limit);
+  const period = validateCreditPeriod({ from, to });
+  const params = { store_id: config.storeId, limit: validatedLimit };
+  if (period.from !== undefined) params.from = period.from;
+  if (period.to !== undefined) params.to = period.to;
   try {
     const response = await httpClient.get(config.url, {
-      params: { store_id: config.storeId, limit: validatedLimit },
+      params,
       headers: { Authorization: `Bearer ${config.token}` },
       timeout: config.timeoutMs,
       maxRedirects: 0,
@@ -237,4 +323,5 @@ module.exports = {
   parseLimit,
   readCreditConfig,
   sanitizeCreditOperations,
+  validateCreditPeriod,
 };
