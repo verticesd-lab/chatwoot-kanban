@@ -739,15 +739,43 @@
 
           <section id="view-credit" class="view">
             <div class="credit-heading">
-              <div>
+              <div class="credit-heading-copy">
                 <p class="muted">Acompanhe pré-análises, pendências e situações que exigem atenção.</p>
+                <p id="credit-period-active" class="credit-period-active">Período: Hoje</p>
               </div>
-              <span class="credit-read-only-badge">SOMENTE LEITURA</span>
+              <div class="credit-heading-actions">
+                <form id="credit-period-form" class="credit-period-form" novalidate>
+                  <label class="credit-period-preset-field" for="credit-period-preset">
+                    <span>Período</span>
+                    <select id="credit-period-preset" aria-label="Período da Central de Crédito">
+                      <option value="today" selected>Hoje</option>
+                      <option value="last7days">Últimos 7 dias</option>
+                      <option value="currentMonth">Mês atual</option>
+                      <option value="last30days">Últimos 30 dias</option>
+                      <option value="currentYear">Ano atual</option>
+                      <option value="custom">Personalizado</option>
+                    </select>
+                  </label>
+                  <div id="credit-custom-period-fields" class="credit-custom-period-fields is-hidden">
+                    <label for="credit-period-start">
+                      <span>Data inicial</span>
+                      <input id="credit-period-start" type="date" required />
+                    </label>
+                    <label for="credit-period-end">
+                      <span>Data final</span>
+                      <input id="credit-period-end" type="date" required />
+                    </label>
+                    <button id="credit-period-apply" class="button button-secondary" type="submit">Aplicar</button>
+                  </div>
+                  <p id="credit-period-feedback" class="credit-period-feedback is-hidden" role="alert"></p>
+                </form>
+                <span class="credit-read-only-badge">SOMENTE LEITURA</span>
+              </div>
             </div>
 
             <div class="credit-metrics" aria-label="Indicadores da operação de crédito">
               <article class="credit-metric-card">
-                <span>CPFs coletados hoje</span>
+                <span id="credit-metric-cpf-label">CPFs coletados hoje</span>
                 <strong id="credit-metric-cpf-collected-today">0</strong>
               </article>
               <article class="credit-metric-card">

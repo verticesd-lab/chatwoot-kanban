@@ -85,6 +85,9 @@ const state = {
   credit: {
     enabled: false,
     readOnly: true,
+    periodPreset: "today",
+    periodStart: "",
+    periodEnd: "",
     metrics: {
       cpfCollectedToday: 0,
       processing: 0,
@@ -3447,6 +3450,145 @@ const CREDIT_FIELD_LABELS = {
   down_payment: "Entrada",
 };
 
+const CREDIT_PERIOD_PRESET_LABELS = {
+  today: "Hoje",
+  last7days: "Últimos 7 dias",
+  currentMonth: "Mês atual",
+  last30days: "Últimos 30 dias",
+  currentYear: "Ano atual",
+  custom: "Personalizado",
+};
+
+function parseCreditPeriodDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const date = new Date(year, month, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day) return null;
+  return date;
+}
+
+function getCreditPeriodWindow(preset, start = "", end = "", now = new Date()) {
+  const reference = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+  if (!Number.isFinite(reference.getTime()) || !Object.hasOwn(CREDIT_PERIOD_PRESET_LABELS, preset)) {
+    return { valid: false, error: "Período inválido." };
+  }
+
+  const year = reference.getFullYear();
+  const month = reference.getMonth();
+  const day = reference.getDate();
+  let from;
+  let to = new Date(year, month, day + 1);
+
+  if (preset === "custom") {
+    if (!start || !end) return { valid: false, error: "Informe as datas inicial e final." };
+    const startDate = parseCreditPeriodDate(start);
+    const endDate = parseCreditPeriodDate(end);
+    if (!startDate || !endDate) return { valid: false, error: "Informe datas válidas." };
+    if (startDate.getTime() > endDate.getTime()) {
+      return { valid: false, error: "A data inicial deve ser anterior ou igual à data final." };
+    }
+    from = startDate;
+    to = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate() + 1);
+  } else if (preset === "today") {
+    from = new Date(year, month, day);
+  } else if (preset === "last7days") {
+    from = new Date(year, month, day - 6);
+  } else if (preset === "currentMonth") {
+    from = new Date(year, month, 1);
+  } else if (preset === "last30days") {
+    from = new Date(year, month, day - 29);
+  } else if (preset === "currentYear") {
+    from = new Date(year, 0, 1);
+  }
+
+  return { valid: true, from: from.toISOString(), to: to.toISOString() };
+}
+
+function buildCreditOperationsUrl(periodWindow) {
+  const query = new URLSearchParams({ from: periodWindow.from, to: periodWindow.to });
+  return `/api/credit/operations?${query.toString()}`;
+}
+
+function formatCreditPeriodDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : "";
+}
+
+function creditPeriodActiveLabel() {
+  if (state.credit.periodPreset === "custom") {
+    return `${formatCreditPeriodDate(state.credit.periodStart)} a ${formatCreditPeriodDate(state.credit.periodEnd)}`;
+  }
+  return CREDIT_PERIOD_PRESET_LABELS[state.credit.periodPreset] || CREDIT_PERIOD_PRESET_LABELS.today;
+}
+
+function setCreditPeriodFeedback(message = "") {
+  if (!elements.creditPeriodFeedback) return;
+  elements.creditPeriodFeedback.textContent = message;
+  elements.creditPeriodFeedback.classList.toggle("is-hidden", !message);
+}
+
+function setCreditPeriodControlsDisabled(disabled) {
+  for (const control of [
+    elements.creditPeriodPreset,
+    elements.creditPeriodStart,
+    elements.creditPeriodEnd,
+    elements.creditPeriodApply,
+  ]) {
+    if (control) control.disabled = disabled;
+  }
+}
+
+function syncCreditPeriodControls() {
+  if (elements.creditPeriodPreset) elements.creditPeriodPreset.value = state.credit.periodPreset;
+  if (elements.creditPeriodStart) elements.creditPeriodStart.value = state.credit.periodStart;
+  if (elements.creditPeriodEnd) elements.creditPeriodEnd.value = state.credit.periodEnd;
+  elements.creditCustomPeriodFields?.classList.toggle("is-hidden", state.credit.periodPreset !== "custom");
+}
+
+function renderCreditPeriodState() {
+  if (elements.creditPeriodActive) {
+    elements.creditPeriodActive.textContent = `Período: ${creditPeriodActiveLabel()}`;
+  }
+  if (elements.creditMetricCpfLabel) {
+    elements.creditMetricCpfLabel.textContent = state.credit.periodPreset === "today"
+      ? "CPFs coletados hoje"
+      : "CPFs coletados no período";
+  }
+  setCreditPeriodControlsDisabled(state.credit.loading);
+}
+
+async function handleCreditPeriodPresetChange() {
+  const preset = elements.creditPeriodPreset.value;
+  setCreditPeriodFeedback();
+  elements.creditCustomPeriodFields?.classList.toggle("is-hidden", preset !== "custom");
+  if (preset === "custom") return;
+  await loadCreditOperations({ periodSelection: { preset, start: "", end: "" } });
+}
+
+async function handleCreditPeriodSubmit(event) {
+  event.preventDefault();
+  if (elements.creditPeriodPreset.value !== "custom") return;
+  const periodSelection = {
+    preset: "custom",
+    start: elements.creditPeriodStart.value,
+    end: elements.creditPeriodEnd.value,
+  };
+  const periodWindow = getCreditPeriodWindow(
+    periodSelection.preset,
+    periodSelection.start,
+    periodSelection.end
+  );
+  if (!periodWindow.valid) {
+    setCreditPeriodFeedback(periodWindow.error);
+    return;
+  }
+  setCreditPeriodFeedback();
+  await loadCreditOperations({ periodSelection, periodWindow });
+}
+
 function creditStatusLabel(status) {
   return CREDIT_STATUS_LABELS[status] || "Status não identificado";
 }
@@ -3561,6 +3703,7 @@ function closeCreditOperationDetail() {
 }
 
 function renderCreditOperations() {
+  renderCreditPeriodState();
   const metrics = state.credit.metrics || {};
   if (elements.creditMetricCpfCollectedToday) {
     elements.creditMetricCpfCollectedToday.textContent = String(Math.max(0, Number(metrics.cpfCollectedToday) || 0));
@@ -3624,23 +3767,44 @@ function renderCreditOperations() {
 
 async function loadCreditOperations(options = {}) {
   if (!hasPermission("credit:monitor") || state.credit.loading) return;
+  const periodSelection = options.periodSelection || {
+    preset: state.credit.periodPreset,
+    start: state.credit.periodStart,
+    end: state.credit.periodEnd,
+  };
+  const periodWindow = options.periodWindow || getCreditPeriodWindow(
+    periodSelection.preset,
+    periodSelection.start,
+    periodSelection.end
+  );
+  if (!periodWindow.valid) {
+    setCreditPeriodFeedback(periodWindow.error);
+    syncCreditPeriodControls();
+    return;
+  }
   state.credit.loading = true;
   state.credit.error = false;
   renderCreditOperations();
   try {
-    const response = await apiRequest("/api/credit/operations");
+    const response = await apiRequest(buildCreditOperationsUrl(periodWindow));
     state.credit = {
+      ...state.credit,
       enabled: response?.enabled === true,
       readOnly: response?.readOnly !== false,
+      periodPreset: periodSelection.preset,
+      periodStart: periodSelection.preset === "custom" ? periodSelection.start : "",
+      periodEnd: periodSelection.preset === "custom" ? periodSelection.end : "",
       metrics: response?.metrics || {},
       items: Array.isArray(response?.items) ? response.items : [],
       loading: false,
       error: false,
     };
+    syncCreditPeriodControls();
     renderCreditOperations();
   } catch (_error) {
     state.credit.error = true;
     state.credit.items = [];
+    syncCreditPeriodControls();
     if (!options.silent) showToast("Não foi possível carregar a central de crédito.", "error");
   } finally {
     state.credit.loading = false;
@@ -5293,6 +5457,15 @@ function cacheElements() {
     currentUserStatusDot: byId("current-user-status-dot"),
     archiveNavItem: byId("archive-nav-item"),
     creditNavItem: byId("credit-nav-item"),
+    creditPeriodForm: byId("credit-period-form"),
+    creditPeriodPreset: byId("credit-period-preset"),
+    creditCustomPeriodFields: byId("credit-custom-period-fields"),
+    creditPeriodStart: byId("credit-period-start"),
+    creditPeriodEnd: byId("credit-period-end"),
+    creditPeriodApply: byId("credit-period-apply"),
+    creditPeriodFeedback: byId("credit-period-feedback"),
+    creditPeriodActive: byId("credit-period-active"),
+    creditMetricCpfLabel: byId("credit-metric-cpf-label"),
     creditMetricCpfCollectedToday: byId("credit-metric-cpf-collected-today"),
     creditMetricProcessing: byId("credit-metric-processing"),
     creditMetricWaitingInput: byId("credit-metric-waiting-input"),
@@ -5623,6 +5796,8 @@ function bindEvents() {
   elements.tutorialForm?.addEventListener("submit", saveTutorial);
   elements.tutorialCancelEdit?.addEventListener("click", resetTutorialForm);
   elements.reactivationRefresh?.addEventListener("click", () => loadReactivationCenter());
+  elements.creditPeriodPreset?.addEventListener("change", handleCreditPeriodPresetChange);
+  elements.creditPeriodForm?.addEventListener("submit", handleCreditPeriodSubmit);
   elements.reactivationPeriod?.addEventListener("change", () => {
     state.reactivation.period = elements.reactivationPeriod.value;
     loadReactivationCenter({ silent: true });

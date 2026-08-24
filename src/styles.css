@@ -264,6 +264,93 @@ textarea:focus {
   margin: 0;
 }
 
+.credit-heading-copy {
+  min-width: 0;
+}
+
+.credit-period-active {
+  margin: 6px 0 0;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.credit-heading-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.credit-period-form {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
+.credit-period-preset-field,
+.credit-custom-period-fields label {
+  display: grid;
+  gap: 4px;
+}
+
+.credit-period-preset-field > span,
+.credit-custom-period-fields label > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.credit-period-form select,
+.credit-period-form input {
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--panel);
+  font: inherit;
+}
+
+.credit-period-form select {
+  min-width: 170px;
+  padding: 7px 32px 7px 10px;
+}
+
+.credit-period-form input {
+  min-width: 138px;
+  padding: 7px 9px;
+}
+
+.credit-custom-period-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.credit-custom-period-fields.is-hidden {
+  display: none;
+}
+
+.credit-custom-period-fields .button {
+  min-height: 36px;
+  padding: 8px 13px;
+}
+
+.credit-period-feedback {
+  max-width: 360px;
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.credit-period-form :disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
 .credit-read-only-badge {
   flex: 0 0 auto;
   padding: 6px 9px;
@@ -480,6 +567,14 @@ textarea:focus {
 }
 
 @media (max-width: 900px) {
+  .credit-heading {
+    align-items: flex-start;
+  }
+
+  .credit-heading-actions {
+    flex-wrap: wrap;
+  }
+
   .credit-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -492,6 +587,31 @@ textarea:focus {
 @media (max-width: 560px) {
   .credit-heading {
     flex-direction: column;
+  }
+
+  .credit-heading-actions,
+  .credit-period-form,
+  .credit-period-preset-field,
+  .credit-period-form select {
+    width: 100%;
+  }
+
+  .credit-heading-actions {
+    justify-content: flex-start;
+  }
+
+  .credit-period-form {
+    justify-items: stretch;
+  }
+
+  .credit-custom-period-fields {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .credit-period-form input {
+    width: 100%;
   }
 
   .credit-metrics {

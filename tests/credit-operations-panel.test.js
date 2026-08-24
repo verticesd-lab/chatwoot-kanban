@@ -4,6 +4,7 @@ const http = require("http");
 const net = require("net");
 const os = require("os");
 const path = require("path");
+const vm = require("vm");
 const { spawn } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
@@ -171,6 +172,131 @@ function findForbiddenKey(value, forbiddenKeys) {
   return null;
 }
 
+function loadCreditPeriodFrontendHarness() {
+  const source = fs.readFileSync(path.join(root, "src", "script.js"), "utf8");
+  const context = {
+    document: { addEventListener() {} },
+    URLSearchParams,
+  };
+  vm.runInNewContext(`${source}\n;globalThis.__creditPeriodHarness = {
+    getWindow: getCreditPeriodWindow,
+    buildUrl: buildCreditOperationsUrl,
+    getState: () => JSON.stringify({
+      preset: state.credit.periodPreset,
+      start: state.credit.periodStart,
+      end: state.credit.periodEnd,
+    }),
+    renderLabels(preset, start = "", end = "") {
+      const active = { textContent: "" };
+      const metric = { textContent: "" };
+      state.credit.periodPreset = preset;
+      state.credit.periodStart = start;
+      state.credit.periodEnd = end;
+      Object.assign(elements, {
+        creditPeriodActive: active,
+        creditMetricCpfLabel: metric,
+      });
+      renderCreditPeriodState();
+      return JSON.stringify({ active: active.textContent, metric: metric.textContent });
+    },
+    async changePreset(preset) {
+      const calls = [];
+      const originalLoad = loadCreditOperations;
+      loadCreditOperations = async (options) => calls.push(options.periodSelection);
+      Object.assign(elements, {
+        creditPeriodPreset: { value: preset },
+        creditCustomPeriodFields: { classList: { toggle() {} } },
+        creditPeriodFeedback: { textContent: "", classList: { toggle() {} } },
+      });
+      await handleCreditPeriodPresetChange();
+      loadCreditOperations = originalLoad;
+      return JSON.stringify(calls);
+    },
+    async submitCustom(start, end) {
+      const calls = [];
+      const feedback = { textContent: "", classList: { toggle() {} } };
+      const originalLoad = loadCreditOperations;
+      loadCreditOperations = async (options) => calls.push(options.periodSelection);
+      Object.assign(elements, {
+        creditPeriodPreset: { value: "custom" },
+        creditPeriodStart: { value: start },
+        creditPeriodEnd: { value: end },
+        creditPeriodFeedback: feedback,
+      });
+      await handleCreditPeriodSubmit({ preventDefault() {} });
+      loadCreditOperations = originalLoad;
+      return JSON.stringify({ calls, feedback: feedback.textContent });
+    },
+  };`, context);
+  return context.__creditPeriodHarness;
+}
+
+async function assertCreditPeriodFrontendContract() {
+  const harness = loadCreditPeriodFrontendHarness();
+  assert.deepStrictEqual(JSON.parse(harness.getState()), { preset: "today", start: "", end: "" });
+  const now = new Date(2026, 7, 24, 15, 30, 0);
+  const expectedTomorrow = new Date(2026, 7, 25).toISOString();
+  const assertWindow = (preset, expectedFrom) => {
+    const window = harness.getWindow(preset, "", "", now);
+    assert.strictEqual(window.valid, true, `${preset} deve gerar uma janela válida`);
+    assert.strictEqual(window.from, expectedFrom);
+    assert.strictEqual(window.to, expectedTomorrow);
+    return window;
+  };
+
+  const today = assertWindow("today", new Date(2026, 7, 24).toISOString());
+  const last7days = assertWindow("last7days", new Date(2026, 7, 18).toISOString());
+  assertWindow("currentMonth", new Date(2026, 7, 1).toISOString());
+  assertWindow("last30days", new Date(2026, 6, 26).toISOString());
+  assertWindow("currentYear", new Date(2026, 0, 1).toISOString());
+
+  const sameDay = harness.getWindow("custom", "2026-08-24", "2026-08-24", now);
+  assert.strictEqual(sameDay.valid, true);
+  assert.strictEqual(sameDay.from, new Date(2026, 7, 24).toISOString());
+  assert.strictEqual(sameDay.to, new Date(2026, 7, 25).toISOString());
+
+  const customRange = harness.getWindow("custom", "2026-08-20", "2026-08-24", now);
+  assert.strictEqual(customRange.valid, true);
+  assert.strictEqual(customRange.from, new Date(2026, 7, 20).toISOString());
+  assert.strictEqual(customRange.to, new Date(2026, 7, 25).toISOString(), "data final deve ser inclusiva na UI");
+  assert.strictEqual(harness.getWindow("custom", "2026-08-25", "2026-08-24", now).valid, false);
+  assert.strictEqual(harness.getWindow("custom", "", "2026-08-24", now).valid, false);
+
+  const url = harness.buildUrl(customRange);
+  assert(url.startsWith("/api/credit/operations?"));
+  assert(url.includes("from=2026-08-20T"));
+  assert(url.includes("%3A"), "timestamps devem estar codificados na query");
+  const parsedUrl = new URL(url, "https://crm.example.com");
+  assert.strictEqual(parsedUrl.searchParams.get("from"), customRange.from);
+  assert.strictEqual(parsedUrl.searchParams.get("to"), customRange.to);
+  assert.notStrictEqual(harness.buildUrl(today), harness.buildUrl(last7days));
+
+  assert.deepStrictEqual(JSON.parse(harness.renderLabels("today")), {
+    active: "Período: Hoje",
+    metric: "CPFs coletados hoje",
+  });
+  assert.deepStrictEqual(JSON.parse(harness.renderLabels("last7days")), {
+    active: "Período: Últimos 7 dias",
+    metric: "CPFs coletados no período",
+  });
+  assert.deepStrictEqual(JSON.parse(harness.renderLabels("custom", "2026-08-20", "2026-08-24")), {
+    active: "Período: 20/08/2026 a 24/08/2026",
+    metric: "CPFs coletados no período",
+  });
+
+  const presetCalls = JSON.parse(await harness.changePreset("last7days"));
+  assert.deepStrictEqual(presetCalls, [{ preset: "last7days", start: "", end: "" }]);
+  assert.deepStrictEqual(JSON.parse(await harness.changePreset("custom")), []);
+
+  const incompleteSubmit = JSON.parse(await harness.submitCustom("", "2026-08-24"));
+  assert.strictEqual(incompleteSubmit.calls.length, 0, "personalizado incompleto não deve consultar");
+  assert(incompleteSubmit.feedback.includes("datas inicial e final"));
+  const invertedSubmit = JSON.parse(await harness.submitCustom("2026-08-25", "2026-08-24"));
+  assert.strictEqual(invertedSubmit.calls.length, 0, "personalizado invertido não deve consultar");
+  const validSubmit = JSON.parse(await harness.submitCustom("2026-08-20", "2026-08-24"));
+  assert.deepStrictEqual(validSubmit.calls, [{ preset: "custom", start: "2026-08-20", end: "2026-08-24" }]);
+}
+
 async function startMockAutoCore() {
   const state = { mode: "valid", requests: [], redirectHits: 0 };
   const server = http.createServer((req, res) => {
@@ -209,6 +335,7 @@ async function startMockAutoCore() {
   let crm;
   let mock;
   try {
+    await assertCreditPeriodFrontendContract();
     const gateway = require("../src/autocore-credit");
     assert.throws(() => gateway.readCreditConfig({
       CREDIT_PANEL_WRITE_ENABLED: "false",
@@ -531,7 +658,15 @@ async function startMockAutoCore() {
     assert(html.includes('id="credit-nav-item" class="nav-item is-hidden" data-view="credit"'));
     assert(html.includes('id="credit-operation-drawer" class="drawer credit-detail-drawer"'));
     assert(html.includes("SOMENTE LEITURA"));
-    assert(script.includes('apiRequest("/api/credit/operations")'));
+    assert(html.includes('<option value="today" selected>Hoje</option>'));
+    for (const id of [
+      "credit-period-form", "credit-period-preset", "credit-custom-period-fields",
+      "credit-period-start", "credit-period-end", "credit-period-apply", "credit-period-active",
+    ]) assert(html.includes(`id="${id}"`), `controle ${id} deve existir`);
+    assert(script.includes("apiRequest(buildCreditOperationsUrl(periodWindow))"));
+    assert(script.includes('elements.creditPeriodPreset?.addEventListener("change", handleCreditPeriodPresetChange)'));
+    assert(script.includes('"CPFs coletados hoje"'));
+    assert(script.includes('"CPFs coletados no período"'));
     assert(script.includes('"Nenhuma análise disponível ainda."'));
     assert(script.includes('"Não foi possível carregar a central de crédito."'));
     assert(script.includes("function openCreditOperationDetail(operation)"));
