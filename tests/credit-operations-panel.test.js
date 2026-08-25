@@ -108,7 +108,7 @@ function validUpstreamContract(readOnly = true) {
     readOnly,
     generatedAt: "2026-08-14T12:00:00.000Z",
     storeId: 999,
-    metrics: { cpfCollectedToday: 2, processing: 1, waitingInput: 0, attentionRequired: 1, secretMetric: 9 },
+    metrics: { cpfCollectedToday: 3, processing: 1, waitingInput: 0, attentionRequired: 1, secretMetric: 9 },
     ...unexpected,
     items: [
       {
