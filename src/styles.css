@@ -449,6 +449,109 @@ textarea:focus {
   gap: 9px;
 }
 
+.credit-queue-filters {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.credit-opportunity-tabs,
+.credit-bank-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.credit-filter-tab,
+.credit-bank-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: #475569;
+  background: var(--panel);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.credit-filter-tab span,
+.credit-bank-filter strong {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #475569;
+  background: #e2e8f0;
+  font-size: 10px;
+  text-align: center;
+}
+
+.credit-filter-tab:hover,
+.credit-filter-tab:focus-visible,
+.credit-bank-filter:hover,
+.credit-bank-filter:focus-visible {
+  border-color: #93c5fd;
+  outline: none;
+}
+
+.credit-filter-tab.is-active {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.credit-filter-tab-opportunity.is-active,
+.credit-bank-filter.is-active {
+  border-color: #22c55e;
+  color: #166534;
+  background: #f0fdf4;
+}
+
+.credit-filter-tab-opportunity.is-active span,
+.credit-bank-filter.is-active strong {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.credit-filter-tab:disabled,
+.credit-bank-filter:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.credit-bank-filter-group {
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.credit-bank-filter-group.is-hidden {
+  display: none;
+}
+
+.credit-bank-filter-group > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.credit-filter-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .credit-operation-row {
   display: grid;
   grid-template-columns: minmax(90px, .7fr) minmax(72px, .6fr) minmax(130px, 1fr) minmax(100px, .8fr) minmax(110px, .9fr) minmax(180px, 1.5fr) minmax(140px, 1.2fr) minmax(130px, 1fr);
@@ -470,6 +573,17 @@ textarea:focus {
   box-shadow: 0 8px 24px rgba(37, 99, 235, .09);
   transform: translateY(-1px);
   outline: none;
+}
+
+.credit-operation-row.has-credit-opportunity {
+  border-color: #86efac;
+  background: linear-gradient(90deg, #f0fdf4 0, var(--panel) 18%);
+}
+
+.credit-operation-row.has-credit-opportunity:hover,
+.credit-operation-row.has-credit-opportunity:focus-visible {
+  border-color: #22c55e;
+  box-shadow: 0 8px 24px rgba(22, 163, 74, .1);
 }
 
 .credit-operation-field {

@@ -799,6 +799,35 @@
                   <h2>Fila de análise</h2>
                 </div>
               </div>
+              <div id="credit-queue-filters" class="credit-queue-filters">
+                <div class="credit-opportunity-tabs" role="tablist" aria-label="Filtrar análises de crédito">
+                  <button
+                    id="credit-filter-all"
+                    class="credit-filter-tab is-active"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    data-credit-opportunity-filter="all"
+                  >
+                    Todos <span id="credit-filter-all-count">0</span>
+                  </button>
+                  <button
+                    id="credit-filter-available"
+                    class="credit-filter-tab credit-filter-tab-opportunity"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    data-credit-opportunity-filter="available"
+                  >
+                    Com oportunidade <span id="credit-filter-available-count">0</span>
+                  </button>
+                </div>
+                <div id="credit-bank-filter-group" class="credit-bank-filter-group is-hidden">
+                  <span>Oportunidades por banco</span>
+                  <div id="credit-bank-filters" class="credit-bank-filters"></div>
+                </div>
+                <p id="credit-filter-summary" class="credit-filter-summary">Exibindo 0 de 0 análises</p>
+              </div>
               <div id="credit-operations-list" class="credit-empty-state">
                 <strong>Nenhuma análise disponível ainda.</strong>
                 <span>Os dados aparecerão aqui quando a integração com o AutoCore for ativada.</span>

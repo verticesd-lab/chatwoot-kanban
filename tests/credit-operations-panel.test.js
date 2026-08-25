@@ -181,6 +181,10 @@ function loadCreditPeriodFrontendHarness() {
   vm.runInNewContext(`${source}\n;globalThis.__creditPeriodHarness = {
     getWindow: getCreditPeriodWindow,
     buildUrl: buildCreditOperationsUrl,
+    bankOptions: (items) => JSON.stringify(getCreditOpportunityBankOptions(items)),
+    filterOperations: (items, opportunityFilter, bankFilter) => JSON.stringify(
+      filterCreditOperations(items, opportunityFilter, bankFilter).map((item) => item.conversationId)
+    ),
     getState: () => JSON.stringify({
       preset: state.credit.periodPreset,
       start: state.credit.periodStart,
@@ -297,6 +301,45 @@ async function assertCreditPeriodFrontendContract() {
   assert.deepStrictEqual(validSubmit.calls, [{ preset: "custom", start: "2026-08-20", end: "2026-08-24" }]);
 }
 
+function assertCreditOpportunityFrontendContract() {
+  const harness = loadCreditPeriodFrontendHarness();
+  const operations = [
+    {
+      conversationId: "101",
+      banks: [
+        { code: "001", name: "Banco Alfa", status: "available", available: true },
+        { code: "033", name: "Banco Beta", status: "unavailable", available: false },
+      ],
+    },
+    {
+      conversationId: "102",
+      banks: [
+        { code: "033", name: "Banco Beta", status: "available", available: true },
+        { code: "033", name: "Banco Beta", status: "available", available: true },
+      ],
+    },
+    {
+      conversationId: "103",
+      status: "available",
+      banks: [{ code: "104", name: null, status: "available", available: false }],
+    },
+    { conversationId: "104", banks: [] },
+  ];
+
+  assert.deepStrictEqual(JSON.parse(harness.filterOperations(operations, "all", "")), ["101", "102", "103", "104"]);
+  assert.deepStrictEqual(
+    JSON.parse(harness.filterOperations(operations, "available", "")),
+    ["101", "102"],
+    "somente available=true no banco identifica uma oportunidade"
+  );
+  assert.deepStrictEqual(JSON.parse(harness.filterOperations(operations, "available", "001")), ["101"]);
+  assert.deepStrictEqual(JSON.parse(harness.filterOperations(operations, "available", "033")), ["102"]);
+  assert.deepStrictEqual(JSON.parse(harness.bankOptions(operations)), [
+    { code: "001", label: "Banco Alfa (001)", count: 1 },
+    { code: "033", label: "Banco Beta (033)", count: 1 },
+  ], "cada lead deve ser contado uma única vez por banco");
+}
+
 async function startMockAutoCore() {
   const state = { mode: "valid", requests: [], redirectHits: 0 };
   const server = http.createServer((req, res) => {
@@ -336,6 +379,7 @@ async function startMockAutoCore() {
   let mock;
   try {
     await assertCreditPeriodFrontendContract();
+    assertCreditOpportunityFrontendContract();
     const gateway = require("../src/autocore-credit");
     assert.throws(() => gateway.readCreditConfig({
       CREDIT_PANEL_WRITE_ENABLED: "false",
@@ -662,9 +706,15 @@ async function startMockAutoCore() {
     for (const id of [
       "credit-period-form", "credit-period-preset", "credit-custom-period-fields",
       "credit-period-start", "credit-period-end", "credit-period-apply", "credit-period-active",
+      "credit-queue-filters", "credit-filter-all", "credit-filter-available",
+      "credit-filter-all-count", "credit-filter-available-count", "credit-bank-filter-group",
+      "credit-bank-filters", "credit-filter-summary",
     ]) assert(html.includes(`id="${id}"`), `controle ${id} deve existir`);
     assert(script.includes("apiRequest(buildCreditOperationsUrl(periodWindow))"));
     assert(script.includes('elements.creditPeriodPreset?.addEventListener("change", handleCreditPeriodPresetChange)'));
+    assert(script.includes('button.addEventListener("click", () => selectCreditOpportunityFilter'));
+    assert(script.includes("bank?.available === true"));
+    assert(script.includes("function selectCreditBankFilter(bankCode)"));
     assert(script.includes('"CPFs coletados hoje"'));
     assert(script.includes('"CPFs coletados no período"'));
     assert(script.includes('"Nenhuma análise disponível ainda."'));

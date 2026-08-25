@@ -88,6 +88,8 @@ const state = {
     periodPreset: "today",
     periodStart: "",
     periodEnd: "",
+    opportunityFilter: "all",
+    bankFilter: "",
     metrics: {
       cpfCollectedToday: 0,
       processing: 0,
@@ -3702,6 +3704,113 @@ function closeCreditOperationDetail() {
   document.body.style.overflow = "";
 }
 
+function creditAvailableBanks(operation) {
+  return Array.isArray(operation?.banks)
+    ? operation.banks.filter((bank) => bank?.available === true)
+    : [];
+}
+
+function creditOperationHasOpportunity(operation) {
+  return creditAvailableBanks(operation).length > 0;
+}
+
+function creditBankLabel(bank) {
+  return bank?.name ? `${bank.name} (${bank.code})` : `Banco ${bank?.code || "não identificado"}`;
+}
+
+function getCreditOpportunityBankOptions(items) {
+  const banksByCode = new Map();
+  for (const operation of Array.isArray(items) ? items : []) {
+    const operationBankCodes = new Set();
+    for (const bank of creditAvailableBanks(operation)) {
+      const code = String(bank.code || "");
+      if (!code || operationBankCodes.has(code)) continue;
+      operationBankCodes.add(code);
+      const current = banksByCode.get(code) || { code, label: creditBankLabel(bank), count: 0 };
+      current.count += 1;
+      if (bank.name) current.label = creditBankLabel(bank);
+      banksByCode.set(code, current);
+    }
+  }
+  return [...banksByCode.values()].sort((left, right) => (
+    left.code.localeCompare(right.code, "pt-BR", { numeric: true })
+  ));
+}
+
+function filterCreditOperations(items, opportunityFilter = "all", bankFilter = "") {
+  const operations = Array.isArray(items) ? items : [];
+  if (bankFilter) {
+    return operations.filter((operation) => (
+      creditAvailableBanks(operation).some((bank) => String(bank.code || "") === bankFilter)
+    ));
+  }
+  if (opportunityFilter === "available") return operations.filter(creditOperationHasOpportunity);
+  return operations;
+}
+
+function selectCreditOpportunityFilter(filter) {
+  state.credit.opportunityFilter = filter === "available" ? "available" : "all";
+  state.credit.bankFilter = "";
+  renderCreditOperations();
+}
+
+function selectCreditBankFilter(bankCode) {
+  state.credit.opportunityFilter = "available";
+  state.credit.bankFilter = String(bankCode || "");
+  renderCreditOperations();
+}
+
+function renderCreditQueueFilters() {
+  const items = Array.isArray(state.credit.items) ? state.credit.items : [];
+  const opportunityCount = items.filter(creditOperationHasOpportunity).length;
+  const bankOptions = getCreditOpportunityBankOptions(items);
+  if (state.credit.bankFilter && !bankOptions.some((bank) => bank.code === state.credit.bankFilter)) {
+    state.credit.bankFilter = "";
+  }
+  const visibleItems = filterCreditOperations(
+    items,
+    state.credit.opportunityFilter,
+    state.credit.bankFilter
+  );
+
+  if (elements.creditFilterAllCount) elements.creditFilterAllCount.textContent = String(items.length);
+  if (elements.creditFilterAvailableCount) {
+    elements.creditFilterAvailableCount.textContent = String(opportunityCount);
+  }
+  document.querySelectorAll("[data-credit-opportunity-filter]").forEach((button) => {
+    const active = button.dataset.creditOpportunityFilter === state.credit.opportunityFilter;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.disabled = state.credit.loading;
+  });
+
+  if (elements.creditBankFilterGroup) {
+    elements.creditBankFilterGroup.classList.toggle("is-hidden", bankOptions.length === 0);
+  }
+  if (elements.creditBankFilters) {
+    elements.creditBankFilters.replaceChildren();
+    for (const bank of bankOptions) {
+      const button = createElement("button", "credit-bank-filter");
+      button.type = "button";
+      button.disabled = state.credit.loading;
+      button.classList.toggle("is-active", state.credit.bankFilter === bank.code);
+      button.setAttribute("aria-pressed", String(state.credit.bankFilter === bank.code));
+      button.append(
+        createElement("span", null, bank.label),
+        createElement("strong", null, bank.count)
+      );
+      button.addEventListener("click", () => selectCreditBankFilter(bank.code));
+      elements.creditBankFilters.appendChild(button);
+    }
+  }
+  if (elements.creditFilterSummary) {
+    const analysisLabel = items.length === 1 ? "análise" : "análises";
+    const opportunityLabel = opportunityCount === 1 ? "oportunidade encontrada" : "oportunidades encontradas";
+    elements.creditFilterSummary.textContent = `Exibindo ${visibleItems.length} de ${items.length} ${analysisLabel} · ${opportunityCount} ${opportunityLabel}`;
+  }
+  return visibleItems;
+}
+
 function renderCreditOperations() {
   renderCreditPeriodState();
   const metrics = state.credit.metrics || {};
@@ -3717,6 +3826,7 @@ function renderCreditOperations() {
   if (elements.creditMetricAttentionRequired) {
     elements.creditMetricAttentionRequired.textContent = String(Math.max(0, Number(metrics.attentionRequired) || 0));
   }
+  const visibleItems = renderCreditQueueFilters();
   if (!elements.creditOperationsList) return;
   elements.creditOperationsList.replaceChildren();
   if (state.credit.loading) {
@@ -3737,11 +3847,20 @@ function renderCreditOperations() {
     elements.creditOperationsList.appendChild(createElement("strong", null, "Nenhuma análise disponível ainda."));
     return;
   }
+  if (!visibleItems.length) {
+    elements.creditOperationsList.className = "credit-empty-state";
+    elements.creditOperationsList.append(
+      createElement("strong", null, "Nenhuma oportunidade encontrada para este filtro."),
+      createElement("span", null, "Selecione outro banco ou visualize todas as análises.")
+    );
+    return;
+  }
 
   elements.creditOperationsList.className = "credit-operations-list";
-  for (const operation of state.credit.items) {
+  for (const operation of visibleItems) {
     const row = createElement("button", "credit-operation-row");
     row.type = "button";
+    row.classList.toggle("has-credit-opportunity", creditOperationHasOpportunity(operation));
     row.setAttribute("aria-label", `Abrir detalhes da conversa ${operation.conversationId}`);
     const fields = [
       ["Conversa", `#${operation.conversationId}`],
@@ -5466,6 +5585,11 @@ function cacheElements() {
     creditPeriodFeedback: byId("credit-period-feedback"),
     creditPeriodActive: byId("credit-period-active"),
     creditMetricCpfLabel: byId("credit-metric-cpf-label"),
+    creditFilterAllCount: byId("credit-filter-all-count"),
+    creditFilterAvailableCount: byId("credit-filter-available-count"),
+    creditBankFilterGroup: byId("credit-bank-filter-group"),
+    creditBankFilters: byId("credit-bank-filters"),
+    creditFilterSummary: byId("credit-filter-summary"),
     creditMetricCpfCollectedToday: byId("credit-metric-cpf-collected-today"),
     creditMetricProcessing: byId("credit-metric-processing"),
     creditMetricWaitingInput: byId("credit-metric-waiting-input"),
@@ -5798,6 +5922,9 @@ function bindEvents() {
   elements.reactivationRefresh?.addEventListener("click", () => loadReactivationCenter());
   elements.creditPeriodPreset?.addEventListener("change", handleCreditPeriodPresetChange);
   elements.creditPeriodForm?.addEventListener("submit", handleCreditPeriodSubmit);
+  document.querySelectorAll("[data-credit-opportunity-filter]").forEach((button) => {
+    button.addEventListener("click", () => selectCreditOpportunityFilter(button.dataset.creditOpportunityFilter));
+  });
   elements.reactivationPeriod?.addEventListener("change", () => {
     state.reactivation.period = elements.reactivationPeriod.value;
     loadReactivationCenter({ silent: true });
