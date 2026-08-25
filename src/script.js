@@ -3461,6 +3461,12 @@ const CREDIT_PERIOD_PRESET_LABELS = {
   custom: "Personalizado",
 };
 
+const CREDIT_BANK_NAMES_BY_CODE = {
+  "033": "Santander",
+  "336": "C6 Bank",
+  "623": "Banco PAN",
+};
+
 function parseCreditPeriodDate(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
   if (!match) return null;
@@ -3663,7 +3669,7 @@ function openCreditOperationDetail(operation) {
     const bankList = createElement("div", "credit-bank-detail-list");
     for (const bank of banks) {
       const card = createElement("article", "credit-bank-detail");
-      card.appendChild(createElement("strong", null, bank.name ? `${bank.name} (${bank.code})` : bank.code));
+      card.appendChild(createElement("strong", null, creditBankLabel(bank)));
       const missingFields = Array.isArray(bank.missingFields) && bank.missingFields.length
         ? bank.missingFields.map((field) => CREDIT_FIELD_LABELS[field] || "Campo pendente").join(", ")
         : "Nenhum";
@@ -3715,10 +3721,21 @@ function creditOperationHasOpportunity(operation) {
 }
 
 function creditBankLabel(bank) {
-  return bank?.name ? `${bank.name} (${bank.code})` : `Banco ${bank?.code || "não identificado"}`;
+  const code = String(bank?.code || "");
+  const name = String(bank?.name || CREDIT_BANK_NAMES_BY_CODE[code] || "").trim();
+  if (code && name) return `${code} · ${name}`;
+  if (code) return `${code} · Banco não identificado`;
+  return name || "Banco não identificado";
 }
 
 function getCreditOpportunityBankOptions(items) {
+  const bankNamesByCode = new Map();
+  for (const operation of Array.isArray(items) ? items : []) {
+    for (const bank of Array.isArray(operation?.banks) ? operation.banks : []) {
+      const code = String(bank?.code || "");
+      if (code && bank?.name) bankNamesByCode.set(code, String(bank.name).trim());
+    }
+  }
   const banksByCode = new Map();
   for (const operation of Array.isArray(items) ? items : []) {
     const operationBankCodes = new Set();
@@ -3726,14 +3743,14 @@ function getCreditOpportunityBankOptions(items) {
       const code = String(bank.code || "");
       if (!code || operationBankCodes.has(code)) continue;
       operationBankCodes.add(code);
-      const current = banksByCode.get(code) || { code, label: creditBankLabel(bank), count: 0 };
+      const bankWithResolvedName = { ...bank, name: bankNamesByCode.get(code) || bank.name };
+      const current = banksByCode.get(code) || { code, label: creditBankLabel(bankWithResolvedName), count: 0 };
       current.count += 1;
-      if (bank.name) current.label = creditBankLabel(bank);
       banksByCode.set(code, current);
     }
   }
   return [...banksByCode.values()].sort((left, right) => (
-    left.code.localeCompare(right.code, "pt-BR", { numeric: true })
+    right.count - left.count || left.code.localeCompare(right.code, "pt-BR", { numeric: true })
   ));
 }
 
@@ -3795,9 +3812,10 @@ function renderCreditQueueFilters() {
       button.disabled = state.credit.loading;
       button.classList.toggle("is-active", state.credit.bankFilter === bank.code);
       button.setAttribute("aria-pressed", String(state.credit.bankFilter === bank.code));
+      button.title = `${bank.label}: ${bank.count} lead${bank.count === 1 ? "" : "s"} com oportunidade`;
       button.append(
         createElement("span", null, bank.label),
-        createElement("strong", null, bank.count)
+        createElement("strong", null, `${bank.count} lead${bank.count === 1 ? "" : "s"}`)
       );
       button.addEventListener("click", () => selectCreditBankFilter(bank.code));
       elements.creditBankFilters.appendChild(button);
@@ -3869,7 +3887,7 @@ function renderCreditOperations() {
       ["CPF", operation.cpfLast4 ? `Final ${operation.cpfLast4}` : "Não informado"],
       ["Entrada", creditDownPaymentLabel(operation.facts?.downPayment)],
       ["Bancos", (operation.banks || []).length
-        ? operation.banks.map((bank) => `${bank.name || bank.code}: ${creditStatusLabel(bank.status)}`).join(" · ")
+        ? operation.banks.map((bank) => `${creditBankLabel(bank)}: ${creditStatusLabel(bank.status)}`).join(" · ")
         : "Nenhum"],
       ["Próxima ação", creditActionLabel(operation.nextAction)],
       ["Atualização", formatDate(operation.updatedAt)],

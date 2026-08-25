@@ -181,6 +181,7 @@ function loadCreditPeriodFrontendHarness() {
   vm.runInNewContext(`${source}\n;globalThis.__creditPeriodHarness = {
     getWindow: getCreditPeriodWindow,
     buildUrl: buildCreditOperationsUrl,
+    bankLabel: (bank) => creditBankLabel(bank),
     bankOptions: (items) => JSON.stringify(getCreditOpportunityBankOptions(items)),
     filterOperations: (items, opportunityFilter, bankFilter) => JSON.stringify(
       filterCreditOperations(items, opportunityFilter, bankFilter).map((item) => item.conversationId)
@@ -303,6 +304,11 @@ async function assertCreditPeriodFrontendContract() {
 
 function assertCreditOpportunityFrontendContract() {
   const harness = loadCreditPeriodFrontendHarness();
+  assert.strictEqual(harness.bankLabel({ code: "033", name: null }), "033 · Santander");
+  assert.strictEqual(harness.bankLabel({ code: "336", name: null }), "336 · C6 Bank");
+  assert.strictEqual(harness.bankLabel({ code: "623", name: null }), "623 · Banco PAN");
+  assert.strictEqual(harness.bankLabel({ code: "033", name: "Nome vindo da API" }), "033 · Nome vindo da API");
+  assert.strictEqual(harness.bankLabel({ code: "999", name: null }), "999 · Banco não identificado");
   const operations = [
     {
       conversationId: "101",
@@ -335,9 +341,16 @@ function assertCreditOpportunityFrontendContract() {
   assert.deepStrictEqual(JSON.parse(harness.filterOperations(operations, "available", "001")), ["101"]);
   assert.deepStrictEqual(JSON.parse(harness.filterOperations(operations, "available", "033")), ["102"]);
   assert.deepStrictEqual(JSON.parse(harness.bankOptions(operations)), [
-    { code: "001", label: "Banco Alfa (001)", count: 1 },
-    { code: "033", label: "Banco Beta (033)", count: 1 },
+    { code: "001", label: "001 · Banco Alfa", count: 1 },
+    { code: "033", label: "033 · Banco Beta", count: 1 },
   ], "cada lead deve ser contado uma única vez por banco");
+  assert.deepStrictEqual(JSON.parse(harness.bankOptions([
+    ...operations,
+    { conversationId: "105", banks: [{ code: "033", name: null, status: "available", available: true }] },
+  ])), [
+    { code: "033", label: "033 · Banco Beta", count: 2 },
+    { code: "001", label: "001 · Banco Alfa", count: 1 },
+  ], "bancos com mais oportunidades devem aparecer primeiro");
 }
 
 async function startMockAutoCore() {
