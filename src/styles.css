@@ -482,6 +482,30 @@ textarea:focus {
   cursor: pointer;
 }
 
+.credit-cpf-reconciliation {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #d8b334;
+  border-radius: 999px;
+  color: #765900;
+  background: #fff8d8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.credit-cpf-reconciliation strong {
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #765900;
+  background: #fde68a;
+  font-size: 10px;
+  text-align: center;
+}
+
 .credit-filter-tab span,
 .credit-bank-filter strong {
   min-width: 46px;
@@ -635,6 +659,53 @@ textarea:focus {
 .credit-detail-section h3 {
   margin: 0 0 14px;
   font-size: 14px;
+}
+
+.credit-attempt-history-summary {
+  margin: -7px 0 12px;
+  font-size: 11px;
+}
+
+.credit-attempt-history {
+  display: grid;
+  gap: 8px;
+}
+
+.credit-attempt-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.credit-attempt-item.is-current {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.credit-attempt-item-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.credit-attempt-item-heading strong {
+  font-size: 11px;
+}
+
+.credit-attempt-item-heading span {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+
+.credit-attempt-item p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .credit-detail-list {

@@ -30,7 +30,14 @@ Object.assign(process.env, {
 const expectedDisabledContract = {
   enabled: false,
   readOnly: true,
-  metrics: { cpfCollectedToday: 0, processing: 0, waitingInput: 0, attentionRequired: 0 },
+  metrics: {
+    cpfCollectedToday: 0,
+    conversationCount: 0,
+    additionalCpfCount: 0,
+    processing: 0,
+    waitingInput: 0,
+    attentionRequired: 0,
+  },
   items: [],
 };
 
@@ -108,7 +115,15 @@ function validUpstreamContract(readOnly = true) {
     readOnly,
     generatedAt: "2026-08-14T12:00:00.000Z",
     storeId: 999,
-    metrics: { cpfCollectedToday: 3, processing: 1, waitingInput: 0, attentionRequired: 1, secretMetric: 9 },
+    metrics: {
+      cpfCollectedToday: 3,
+      conversationCount: 2,
+      additionalCpfCount: 1,
+      processing: 1,
+      waitingInput: 0,
+      attentionRequired: 1,
+      secretMetric: 9,
+    },
     ...unexpected,
     items: [
       {
@@ -182,6 +197,8 @@ function loadCreditPeriodFrontendHarness() {
     getWindow: getCreditPeriodWindow,
     buildUrl: buildCreditOperationsUrl,
     bankLabel: (bank) => creditBankLabel(bank),
+    queueTotals: (metrics, items) => JSON.stringify(creditQueueTotals(metrics, items)),
+    cpfCountLabel: (count) => creditCpfCountLabel(count),
     bankOptions: (items) => JSON.stringify(getCreditOpportunityBankOptions(items)),
     filterOperations: (items, opportunityFilter, bankFilter) => JSON.stringify(
       filterCreditOperations(items, opportunityFilter, bankFilter).map((item) => item.conversationId)
@@ -304,6 +321,22 @@ async function assertCreditPeriodFrontendContract() {
 
 function assertCreditOpportunityFrontendContract() {
   const harness = loadCreditPeriodFrontendHarness();
+  assert.deepStrictEqual(JSON.parse(harness.queueTotals({
+    cpfCollectedToday: 51,
+    conversationCount: 39,
+    additionalCpfCount: 999,
+  }, new Array(10).fill({}))), {
+    conversationCount: 39,
+    cpfCount: 51,
+    additionalCpfCount: 12,
+  }, "totais devem ser reconciliados pela mesma fonte, independentemente do limite da lista");
+  assert.deepStrictEqual(JSON.parse(harness.queueTotals({ cpfCollectedToday: 2 }, [{}, {}])), {
+    conversationCount: 2,
+    cpfCount: 2,
+    additionalCpfCount: 0,
+  }, "contrato legado deve usar as linhas carregadas como fallback");
+  assert.strictEqual(harness.cpfCountLabel(1), "1 CPF");
+  assert.strictEqual(harness.cpfCountLabel(2), "2 CPFs");
   assert.strictEqual(harness.bankLabel({ code: "033", name: null }), "033 · Santander");
   assert.strictEqual(harness.bankLabel({ code: "336", name: null }), "336 · C6 Bank");
   assert.strictEqual(harness.bankLabel({ code: "623", name: null }), "623 · Banco PAN");
@@ -400,7 +433,8 @@ async function startMockAutoCore() {
       AUTOCORE_CREDIT_OPERATIONS_TOKEN: upstreamToken,
       AUTOCORE_CREDIT_OPERATIONS_STORE_ID: "1",
     }), /central de crédito/);
-    assert.throws(() => gateway.parseLimit("101"), /central de crédito/);
+    assert.strictEqual(gateway.parseLimit(undefined), 250);
+    assert.throws(() => gateway.parseLimit("251"), /central de crédito/);
     assert.deepStrictEqual(gateway.validateCreditPeriod(), {});
     assert.deepStrictEqual(
       gateway.validateCreditPeriod({ from: "2026-08-14T12:00:00Z" }),
@@ -616,6 +650,14 @@ async function startMockAutoCore() {
     );
     assert.strictEqual(response.body.storeId, 7);
     assert.strictEqual(response.body.readOnly, true);
+    assert.deepStrictEqual(response.body.metrics, {
+      cpfCollectedToday: 3,
+      conversationCount: 2,
+      additionalCpfCount: 1,
+      processing: 1,
+      waitingInput: 0,
+      attentionRequired: 1,
+    });
     assert.strictEqual(response.body.items[0].cpfLast4, "4725");
     assert.strictEqual(Object.hasOwn(response.body.items[1], "cpfLast4"), false);
     assert.strictEqual(response.body.items[0].banks[0].available, null);
@@ -721,13 +763,15 @@ async function startMockAutoCore() {
       "credit-period-start", "credit-period-end", "credit-period-apply", "credit-period-active",
       "credit-queue-filters", "credit-filter-all", "credit-filter-available",
       "credit-filter-all-count", "credit-filter-available-count", "credit-bank-filter-group",
-      "credit-bank-filters", "credit-filter-summary",
+      "credit-bank-filters", "credit-filter-summary", "credit-additional-cpf-count",
     ]) assert(html.includes(`id="${id}"`), `controle ${id} deve existir`);
     assert(script.includes("apiRequest(buildCreditOperationsUrl(periodWindow))"));
     assert(script.includes('elements.creditPeriodPreset?.addEventListener("change", handleCreditPeriodPresetChange)'));
     assert(script.includes('button.addEventListener("click", () => selectCreditOpportunityFilter'));
     assert(script.includes("bank?.available === true"));
     assert(script.includes("function selectCreditBankFilter(bankCode)"));
+    assert(script.includes("function appendCreditAttemptHistory(operation)"));
+    assert(script.includes('"CPF anterior contabilizado. Os detalhes não eram preservados pelo modelo legado."'));
     assert(script.includes('"CPFs coletados hoje"'));
     assert(script.includes('"CPFs coletados no período"'));
     assert(script.includes('"Nenhuma análise disponível ainda."'));

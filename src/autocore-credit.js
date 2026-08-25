@@ -1,6 +1,7 @@
 const axios = require("axios");
 
-const DEFAULT_LIMIT = 50;
+const DEFAULT_LIMIT = 250;
+const MAX_OPERATIONS_LIMIT = 250;
 const DEFAULT_TIMEOUT_MS = 5000;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 30_000;
@@ -21,6 +22,8 @@ function emptyCreditOperations() {
     readOnly: true,
     metrics: {
       cpfCollectedToday: 0,
+      conversationCount: 0,
+      additionalCpfCount: 0,
       processing: 0,
       waitingInput: 0,
       attentionRequired: 0,
@@ -39,7 +42,7 @@ function parsePositiveInteger(value) {
 function parseLimit(value, fallback = DEFAULT_LIMIT) {
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = parsePositiveInteger(value);
-  if (parsed === null || parsed > 100) throw new CreditGatewayError("INVALID_LIMIT");
+  if (parsed === null || parsed > MAX_OPERATIONS_LIMIT) throw new CreditGatewayError("INVALID_LIMIT");
   return parsed;
 }
 
@@ -270,18 +273,27 @@ function sanitizeCreditOperations(value, configuredStoreId) {
     throw new CreditGatewayError("INVALID_UPSTREAM_CONTRACT");
   }
   const metrics = value.metrics;
+  const items = value.items.map(sanitizeItem).filter(Boolean).slice(0, MAX_OPERATIONS_LIMIT);
+  const cpfCollectedToday = safeCount(metrics.cpfCollectedToday);
+  const conversationCount = Object.hasOwn(metrics, "conversationCount")
+    ? safeCount(metrics.conversationCount)
+    : items.length;
   return {
     enabled: value.enabled === true,
     readOnly: true,
     generatedAt: safeTimestamp(value.generatedAt),
     storeId: configuredStoreId,
     metrics: {
-      cpfCollectedToday: safeCount(metrics.cpfCollectedToday),
+      cpfCollectedToday,
+      conversationCount,
+      additionalCpfCount: Object.hasOwn(metrics, "additionalCpfCount")
+        ? safeCount(metrics.additionalCpfCount)
+        : Math.max(0, cpfCollectedToday - conversationCount),
       processing: safeCount(metrics.processing),
       waitingInput: safeCount(metrics.waitingInput),
       attentionRequired: safeCount(metrics.attentionRequired),
     },
-    items: value.items.map(sanitizeItem).filter(Boolean).slice(0, 100),
+    items,
   };
 }
 

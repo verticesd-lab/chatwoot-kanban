@@ -92,6 +92,8 @@ const state = {
     bankFilter: "",
     metrics: {
       cpfCollectedToday: 0,
+      conversationCount: 0,
+      additionalCpfCount: 0,
       processing: 0,
       waitingInput: 0,
       attentionRequired: 0,
@@ -3631,19 +3633,65 @@ function appendCreditDetailSection(title, entries) {
   elements.creditDetailBody.appendChild(section);
 }
 
+function creditCpfCountLabel(value) {
+  const count = Math.max(1, Number(value) || 1);
+  return `${count} CPF${count === 1 ? "" : "s"}`;
+}
+
+function appendCreditAttemptHistory(operation) {
+  const attemptCount = Math.max(1, Number(operation?.applicantAttempt) || 1);
+  const section = createElement("section", "drawer-section credit-detail-section");
+  section.append(
+    createElement("h3", null, "Histórico de CPFs na conversa"),
+    createElement(
+      "p",
+      "muted credit-attempt-history-summary",
+      `${creditCpfCountLabel(attemptCount)} analisado${attemptCount === 1 ? "" : "s"} nesta conversa.`
+    )
+  );
+  const history = createElement("div", "credit-attempt-history");
+  for (let attempt = attemptCount; attempt >= 1; attempt--) {
+    const current = attempt === attemptCount;
+    const item = createElement("article", `credit-attempt-item${current ? " is-current" : ""}`);
+    const heading = createElement("div", "credit-attempt-item-heading");
+    heading.append(
+      createElement("strong", null, `Tentativa ${attempt}`),
+      createElement("span", null, current ? "ATUAL" : "ANTERIOR")
+    );
+    item.appendChild(heading);
+    if (current) {
+      item.appendChild(createElement(
+        "p",
+        null,
+        `${operation.cpfLast4 ? `CPF final ${operation.cpfLast4}` : "CPF protegido"} · ${creditStatusLabel(operation.status)}`
+      ));
+    } else {
+      item.appendChild(createElement(
+        "p",
+        null,
+        "CPF anterior contabilizado. Os detalhes não eram preservados pelo modelo legado."
+      ));
+    }
+    history.appendChild(item);
+  }
+  section.appendChild(history);
+  elements.creditDetailBody.appendChild(section);
+}
+
 function openCreditOperationDetail(operation) {
   if (!operation || !elements.creditOperationDrawer) return;
   elements.creditDetailConversation.textContent = `CONVERSA #${operation.conversationId}`;
   elements.creditDetailTitle.textContent = "Operação de crédito";
-  elements.creditDetailMeta.textContent = `${creditStatusLabel(operation.status)} · tentativa ${operation.applicantAttempt || 0}`;
+  elements.creditDetailMeta.textContent = `${creditStatusLabel(operation.status)} · ${creditCpfCountLabel(operation.applicantAttempt)} nesta conversa`;
   elements.creditDetailBody.replaceChildren();
 
   appendCreditDetailSection("Identificação", [
     ["Conversa", operation.conversationId],
-    ["Tentativa", operation.applicantAttempt || 0],
+    ["CPFs analisados", creditCpfCountLabel(operation.applicantAttempt)],
     ["Status", creditStatusLabel(operation.status)],
     ["Final do CPF", operation.cpfLast4 ? `Final ${operation.cpfLast4}` : "Não informado"],
   ]);
+  appendCreditAttemptHistory(operation);
   const facts = operation.facts || {};
   appendCreditDetailSection("Dados coletados", [
     ["CPF presente", facts.cpfPresent ? "Sim" : "Não"],
@@ -3777,8 +3825,26 @@ function selectCreditBankFilter(bankCode) {
   renderCreditOperations();
 }
 
+function creditQueueTotals(metrics, items) {
+  const operations = Array.isArray(items) ? items : [];
+  const source = metrics && typeof metrics === "object" ? metrics : {};
+  const conversationCount = Object.hasOwn(source, "conversationCount")
+    ? Math.max(0, Number(source.conversationCount) || 0)
+    : operations.length;
+  const cpfCount = Math.max(0, Number(source.cpfCollectedToday) || 0);
+  return {
+    conversationCount,
+    cpfCount,
+    additionalCpfCount: Math.max(0, cpfCount - conversationCount),
+  };
+}
+
 function renderCreditQueueFilters() {
   const items = Array.isArray(state.credit.items) ? state.credit.items : [];
+  const { conversationCount, cpfCount, additionalCpfCount } = creditQueueTotals(
+    state.credit.metrics,
+    items
+  );
   const opportunityCount = items.filter(creditOperationHasOpportunity).length;
   const bankOptions = getCreditOpportunityBankOptions(items);
   if (state.credit.bankFilter && !bankOptions.some((bank) => bank.code === state.credit.bankFilter)) {
@@ -3790,7 +3856,10 @@ function renderCreditQueueFilters() {
     state.credit.bankFilter
   );
 
-  if (elements.creditFilterAllCount) elements.creditFilterAllCount.textContent = String(items.length);
+  if (elements.creditFilterAllCount) elements.creditFilterAllCount.textContent = String(conversationCount);
+  if (elements.creditAdditionalCpfCount) {
+    elements.creditAdditionalCpfCount.textContent = String(additionalCpfCount);
+  }
   if (elements.creditFilterAvailableCount) {
     elements.creditFilterAvailableCount.textContent = String(opportunityCount);
   }
@@ -3822,9 +3891,10 @@ function renderCreditQueueFilters() {
     }
   }
   if (elements.creditFilterSummary) {
-    const analysisLabel = items.length === 1 ? "análise" : "análises";
-    const opportunityLabel = opportunityCount === 1 ? "oportunidade encontrada" : "oportunidades encontradas";
-    elements.creditFilterSummary.textContent = `Exibindo ${visibleItems.length} de ${items.length} ${analysisLabel} · ${opportunityCount} ${opportunityLabel}`;
+    const loadedPrefix = state.credit.opportunityFilter === "all" && !state.credit.bankFilter
+      ? `Exibindo ${visibleItems.length} de ${conversationCount} conversas`
+      : `Exibindo ${visibleItems.length} conversas filtradas`;
+    elements.creditFilterSummary.textContent = `${loadedPrefix} · ${cpfCount} CPFs analisados · ${additionalCpfCount} adicionais`;
   }
   return visibleItems;
 }
@@ -3882,7 +3952,7 @@ function renderCreditOperations() {
     row.setAttribute("aria-label", `Abrir detalhes da conversa ${operation.conversationId}`);
     const fields = [
       ["Conversa", `#${operation.conversationId}`],
-      ["Tentativa", operation.applicantAttempt || 0],
+      ["CPFs", creditCpfCountLabel(operation.applicantAttempt)],
       ["Status", creditStatusLabel(operation.status), `credit-status credit-status-${operation.status}`],
       ["CPF", operation.cpfLast4 ? `Final ${operation.cpfLast4}` : "Não informado"],
       ["Entrada", creditDownPaymentLabel(operation.facts?.downPayment)],
@@ -5604,6 +5674,7 @@ function cacheElements() {
     creditPeriodActive: byId("credit-period-active"),
     creditMetricCpfLabel: byId("credit-metric-cpf-label"),
     creditFilterAllCount: byId("credit-filter-all-count"),
+    creditAdditionalCpfCount: byId("credit-additional-cpf-count"),
     creditFilterAvailableCount: byId("credit-filter-available-count"),
     creditBankFilterGroup: byId("credit-bank-filter-group"),
     creditBankFilters: byId("credit-bank-filters"),
